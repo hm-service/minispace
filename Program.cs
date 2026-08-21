@@ -1,0 +1,45 @@
+using Microsoft.EntityFrameworkCore;
+using MiniSpace.Data;
+using MiniSpace.Endpoints;
+
+var builder = WebApplication.CreateBuilder(args);
+
+var contentRoot = builder.Environment.ContentRootPath;
+var dataDir = Environment.GetEnvironmentVariable("DATA_DIR");
+if (string.IsNullOrWhiteSpace(dataDir))
+    dataDir = Path.Combine(contentRoot, "data");
+
+Directory.CreateDirectory(dataDir);
+AuditLog.Init(Path.Combine(dataDir, "log.txt"));
+
+builder.Services.AddDbContext<AppDbContext>(o =>
+    o.UseSqlite($"Data Source={Path.Combine(dataDir, "data.db")}"));
+builder.Services.AddOpenApi();
+
+var app = builder.Build();
+
+var mediaDir = Path.Combine(dataDir, "static");
+Directory.CreateDirectory(mediaDir);
+
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    db.Database.EnsureCreated();
+    if (app.Environment.IsDevelopment())
+        await DbSeeder.SeedAsync(db);
+}
+
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
+if (app.Environment.IsDevelopment())
+{
+    app.MapOpenApi();
+}
+
+app.MapAuthEndpoints();
+app.MapPostEndpoints();
+app.MapCommentEndpoints();
+app.MapMediaEndpoints(mediaDir);
+
+app.Run();
