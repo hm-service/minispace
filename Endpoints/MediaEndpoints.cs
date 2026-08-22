@@ -42,6 +42,9 @@ public static class MediaEndpoints
             if (!File.Exists(path))
                 return ApiErrors.NotFound("媒体不存在");
 
+            // sha256 内容寻址，URL 永不失效；private 避免带鉴权响应进共享缓存
+            ctx.Response.Headers.CacheControl = "private, max-age=31536000, immutable";
+
             if (mode == ThumbModeSmall)
             {
                 var (thumbBytes, failed) = await GetOrCreateThumbAsync(thumbs, path, sha256);
@@ -231,6 +234,7 @@ public static class MediaEndpoints
         finally
         {
             gate.Release();
+            ThumbLocks.TryRemove(new KeyValuePair<string, SemaphoreSlim>(sha256, gate));
         }
     }
 

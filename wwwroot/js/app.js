@@ -56,7 +56,7 @@ createApp({
     const timeMode = reactive({});
     const commentText = reactive({});
     const sendingComment = reactive({});
-    const imgCache = reactive({});
+    const imgCache = reactive(new Map());
     const loadingImgs = new Set();
     const fileInput = ref(null);
     const confirmState = reactive({ show: false, title: '', message: '', action: null });
@@ -65,14 +65,22 @@ createApp({
 
     function imgUrl(sha, mode) {
       const key = sha + (mode ? '@' + mode : '');
-      if (imgCache[key]) return imgCache[key];
+      if (imgCache.has(key)) return imgCache.get(key);
       if (!loadingImgs.has(key)) {
         loadingImgs.add(key);
         Api.mediaBlob(sha, mode)
-          .then((blob) => { imgCache[key] = URL.createObjectURL(blob); })
-          .catch(() => { imgCache[key] = ''; });
+          .then((blob) => { imgCache.set(key, URL.createObjectURL(blob)); })
+          .catch(() => { imgCache.set(key, ''); });
       }
       return '';
+    }
+
+    function clearImgCache() {
+      for (const url of imgCache.values()) {
+        if (url) URL.revokeObjectURL(url);
+      }
+      imgCache.clear();
+      loadingImgs.clear();
     }
 
     function openLightbox(postId, sha) {
@@ -598,6 +606,7 @@ createApp({
         if (page.value > totalPages.value) page.value = totalPages.value;
         syncPageUrl();
         posts.value = (await Api.listPosts(page.value)).items;
+        clearImgCache();
         await Promise.all(posts.value.map(async (p) => {
           try {
             comments[p.postId] = (await Api.comments(p.postId)).items;
@@ -819,7 +828,7 @@ createApp({
   },
   template: `
     <div v-if="!me" class="login">
-        <h1>MiniSpace <span class="ver">v2</span></h1>
+        <h1>MiniSpace <span class="ver">v33</span></h1>
         <p class="sub">填入你的访问 token 进入</p>
         <div class="login-box">
           <input v-model="token" :placeholder="tokenFocus ? '' : 'token'" autocomplete="off"
@@ -833,7 +842,7 @@ createApp({
     <div v-else class="wrap">
       <div class="feed">
         <header class="topbar">
-          <div class="brand">MiniSpace <span class="ver">v2</span></div>
+          <div class="brand">MiniSpace <span class="ver">v33</span></div>
           <div class="who">{{ me.nickname }} <button class="link" @click="logout">退出</button></div>
         </header>
 
