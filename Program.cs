@@ -34,12 +34,6 @@ using (var scope = app.Services.CreateScope())
         await DbSeeder.SeedAsync(db);
     var tdb = scope.ServiceProvider.GetRequiredService<ThumbDbContext>();
     tdb.Database.EnsureCreated();
-
-    // 兼容旧库：media 表缺少 width/height 列时补充（重复列错误直接忽略）
-    try { db.Database.ExecuteSqlRaw("ALTER TABLE media ADD COLUMN width INTEGER NOT NULL DEFAULT 0"); }
-    catch { }
-    try { db.Database.ExecuteSqlRaw("ALTER TABLE media ADD COLUMN height INTEGER NOT NULL DEFAULT 0"); }
-    catch { }
 }
 
 app.UseDefaultFiles();

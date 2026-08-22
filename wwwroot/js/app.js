@@ -1,5 +1,5 @@
-const { createApp, ref, reactive, nextTick } = Vue;
-console.log('[MiniSpace] frontend v7');
+const { createApp, ref, reactive, nextTick, inject, provide, onUnmounted } = Vue;
+console.log('[MiniSpace] frontend v37');
 
 // 阻止页面级双指缩放（lightbox 内捏合本来就会 preventDefault，不受影响）
 document.addEventListener('touchmove', (e) => {
@@ -34,7 +34,286 @@ function avatarStyle(id) {
   return { background: `linear-gradient(135deg, hsl(${h1} 72% 62%), hsl(${h2} 66% 46%))` };
 }
 
+// ============ PostCard：一张帖子的完整卡片，持有卡片级图片缓存 ============
+const PostCard = {
+  name: 'PostCard',
+  props: { post: { type: Object, required: true } },
+  setup(props) {
+    const app = inject('app');
+    const postId = props.post.postId;
+    const media = props.post.mediaContent;
+
+    // 卡片级图片缓存：key = sha@mode（缩略图与原图共用），随卡片卸载整体释放
+    const cache = reactive(new Map());
+    const loadingKeys = new Set();
+    const expanded = reactive({});
+    const expCarousel = reactive({ postId: null, dx: 0, dragging: false, snapping: false, width: 0 });
+    const expHeight = reactive({});
+    let expStart = 0;
+    let expStartY = 0;
+    let suppressClick = false;
+
+    function imgUrl(sha, mode) {
+      const key = sha + (mode ? '@' + mode : '');
+      if (cache.has(key)) return cache.get(key);
+      if (!loadingKeys.has(key)) {
+        loadingKeys.add(key);
+        Api.mediaBlob(sha, mode)
+          .then((blob) => cache.set(key, URL.createObjectURL(blob)))
+          .catch(() => cache.set(key, ''));
+      }
+      return '';
+    }
+
+    onUnmounted(() => {
+      for (const url of cache.values()) {
+        if (url) URL.revokeObjectURL(url);
+      }
+      cache.clear();
+    });
+
+    function swallowNextClick() {
+      suppressClick = true;
+      setTimeout(() => { suppressClick = false; }, 350);
+    }
+
+    // ---- 卡片内大图 ----
+    function expList() { return media; }
+    function expSha() { return media[expanded[postId] ?? 0]?.sha256 || ''; }
+    function expNextSha() { return media[(expanded[postId] ?? 0) + 1]?.sha256 || ''; }
+    function expPrevSha() {
+      const i = (expanded[postId] ?? 0) - 1;
+      return i >= 0 ? (media[i]?.sha256 || '') : '';
+    }
+    function expStep(d) {
+      const next = (expanded[postId] ?? 0) + d;
+      if (next >= 0 && next < media.length) expanded[postId] = next;
+    }
+    function collapse() {
+      if (suppressClick) {
+        suppressClick = false;
+        return;
+      }
+      expanded[postId] = null;
+    }
+
+    function expStageStyle() {
+      const h = expHeight[postId];
+      return h ? { height: h + 'px' } : {};
+    }
+    function applyExpHeight(maxRatio) {
+      if (!maxRatio) return;
+      const el = document.querySelector(`.post-expand[data-post="${postId}"] .exp-stage`);
+      const width = el ? el.clientWidth : 300;
+      expHeight[postId] = Math.round(Math.min(window.innerHeight * 0.72, width * maxRatio));
+    }
+    function measureExpHeight() {
+      const known = media.filter((m) => m.width > 0 && m.height > 0);
+      if (known.length === media.length) {
+        applyExpHeight(Math.max(...media.map((m) => m.height / m.width)));
+      }
+      // 旧数据缺尺寸：不计算，等原图请求懒修复后自然补上
+    }
+    function openExpanded(i) {
+      expanded[postId] = i;
+      nextTick(measureExpHeight);
+    }
+
+    // ---- 卡片轮播（拖动跟随） ----
+    function expStartDrag(x, width) {
+      if (expCarousel.dragging) return;
+      expCarousel.postId = postId;
+      expCarousel.dragging = true;
+      expCarousel.snapping = false;
+      expCarousel.dx = 0;
+      expCarousel.width = width || 300;
+      expStart = x;
+    }
+    function expFinishDrag() {
+      if (!expCarousel.dragging || expCarousel.postId !== postId) return;
+      const w = expCarousel.width || 300;
+      const dx = expCarousel.dx;
+      const threshold = Math.min(80, w * 0.28);
+      const hasTarget = dx < 0 ? !!expNextSha() : !!expPrevSha();
+      if (Math.abs(dx) < threshold || !hasTarget) snapExpBack();
+      else snapExpTo(dx < 0 ? 1 : -1);
+    }
+    function snapExpBack() {
+      expCarousel.snapping = true;
+      expCarousel.dx = 0;
+      setTimeout(expResetDrag, 220);
+    }
+    function snapExpTo(d) {
+      expCarousel.snapping = true;
+      expCarousel.dx = -d * expCarousel.width;
+      setTimeout(() => {
+        expResetDrag();
+        expStep(d);
+        swallowNextClick();
+      }, 220);
+    }
+    function expResetDrag() {
+      if (expCarousel.postId !== postId) return;
+      expCarousel.dragging = false;
+      expCarousel.snapping = false;
+      expCarousel.dx = 0;
+      expCarousel.postId = null;
+    }
+
+    function expCurrentStyle() {
+      const c = expCarousel;
+      if (c.postId !== postId || !c.dragging) return {};
+      return {
+        transform: `translateX(${c.dx}px)`,
+        transition: c.snapping ? 'transform .22s ease' : 'none',
+      };
+    }
+    function expNextStyle() {
+      const c = expCarousel;
+      if (c.postId !== postId || !c.dragging || c.dx >= 0) return { display: 'none' };
+      return {
+        transform: `translateX(calc(100% + ${c.dx}px))`,
+        transition: c.snapping ? 'transform .22s ease' : 'none',
+      };
+    }
+    function expPrevStyle() {
+      const c = expCarousel;
+      if (c.postId !== postId || !c.dragging || c.dx <= 0) return { display: 'none' };
+      return {
+        transform: `translateX(calc(-100% + ${c.dx}px))`,
+        transition: c.snapping ? 'transform .22s ease' : 'none',
+      };
+    }
+
+    function onExpTouchStart(e) {
+      if (e.touches.length >= 2) {
+        // 双指捏合 → 直接进入全屏大图
+        swallowNextClick();
+        expResetDrag();
+        app.openLightbox(postId, expanded[postId] ?? 0);
+        return;
+      }
+      if (expCarousel.dragging) return;
+      const t = e.changedTouches[0];
+      expStart = t.clientX;
+      expStartY = t.clientY;
+      const stage = e.currentTarget.querySelector('.exp-stage');
+      expStartDrag(t.clientX, stage ? stage.clientWidth : 300);
+    }
+    function onExpTouchMove(e) {
+      if (!expCarousel.dragging) return;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - expStart;
+      const dy = t.clientY - expStartY;
+      if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8) {
+        e.preventDefault();
+        expCarousel.dx = dx;
+      } else if (Math.abs(dy) > 12) {
+        expResetDrag();
+      }
+    }
+    function onExpTouchEnd() { expFinishDrag(); }
+    function onExpTouchCancel() { expResetDrag(); }
+
+    function onExpMouseDown(e) {
+      if (expCarousel.dragging) return;
+      const stage = e.currentTarget.querySelector('.exp-stage');
+      expStartDrag(e.clientX, stage ? stage.clientWidth : 300);
+      window.addEventListener('mousemove', onExpMouseMove);
+      window.addEventListener('mouseup', onExpMouseUp);
+    }
+    function onExpMouseMove(e) {
+      if (!expCarousel.dragging) return;
+      expCarousel.dx = e.clientX - expStart;
+    }
+    function onExpMouseUp() {
+      window.removeEventListener('mousemove', onExpMouseMove);
+      window.removeEventListener('mouseup', onExpMouseUp);
+      expFinishDrag();
+    }
+
+    const gridClass = (list) => list.length === 1 ? 'grid single' : 'grid';
+
+    return {
+      post: props.post,
+      me: app.me, comments: app.comments, commentText: app.commentText,
+      sendingComment: app.sendingComment,
+      removePost: app.removePost, openLightbox: app.openLightbox,
+      sendComment: app.sendComment, onCommentInput: app.onCommentInput,
+      onCommentKeydown: app.onCommentKeydown, removeComment: app.removeComment,
+      toggleTime: app.toggleTime, displayTime: app.displayTime,
+      avatarStyle, fmtTime, fullTime, gridClass,
+      imgUrl, media, expanded,
+      expSha, expNextSha, expPrevSha, expStep, collapse,
+      expStageStyle, expCurrentStyle, expNextStyle, expPrevStyle,
+      openExpanded, onExpTouchStart, onExpTouchMove, onExpTouchEnd, onExpTouchCancel,
+      onExpMouseDown,
+    };
+  },
+  template: `
+    <article class="post card">
+      <header>
+        <span class="avatar" :style="avatarStyle(post.userId)">{{ post.nickname[0] }}</span>
+        <div class="meta">
+          <div class="nick">{{ post.nickname }}</div>
+          <div class="time" @click="toggleTime('p:' + post.postId)">
+            {{ displayTime('p:' + post.postId, post.createdAt) }}
+          </div>
+        </div>
+        <button v-if="post.userId === me.userId" class="link del" @click="removePost(post.postId)">删除</button>
+      </header>
+      <p class="text">{{ post.textContent }}</p>
+      <div v-if="typeof expanded[post.postId] === 'number'" class="post-expand"
+           @touchstart="onExpTouchStart($event)"
+           @touchmove="onExpTouchMove"
+           @touchend="onExpTouchEnd"
+           @touchcancel="onExpTouchCancel"
+           @mousedown.prevent="onExpMouseDown($event)">
+        <div class="exp-stage" :data-post="post.postId" :style="expStageStyle()">
+          <img v-if="expPrevSha()" class="exp-img" :src="imgUrl(expPrevSha(), 'medium')"
+               :style="expPrevStyle()" draggable="false">
+          <img class="exp-img" :src="imgUrl(expSha(), 'medium')"
+               :style="expCurrentStyle()" draggable="false"
+               @click="collapse()">
+          <img v-if="expNextSha()" class="exp-img" :src="imgUrl(expNextSha(), 'medium')"
+               :style="expNextStyle()" draggable="false">
+        </div>
+        <div class="expand-bar">
+          <button class="ghost small" @click="collapse()">收起</button>
+          <span class="exp-count">{{ (expanded[post.postId] ?? 0) + 1 }} / {{ media.length }}</span>
+          <button class="primary small" @click="openLightbox(post.postId, expanded[post.postId] ?? 0)">⛶ 大图</button>
+        </div>
+      </div>
+      <div v-else-if="media.length" :class="gridClass(media)">
+        <img v-for="(m, i) in media" :key="i"
+             :src="imgUrl(m.sha256, media.length === 1 ? 'medium' : 'small')" loading="lazy"
+             @click="openExpanded(i)">
+      </div>
+      <div class="comments">
+        <p v-if="!(comments[post.postId] || []).length" class="no-comment">还没有评论</p>
+        <div v-for="c in comments[post.postId] || []" :key="c.commentId" class="comment">
+          <b>{{ c.nickname }}</b>{{ c.content }}
+          <button v-if="c.userId === me.userId" class="link del small-del"
+                  @click="removeComment(post.postId, c.commentId)">删除</button>
+          <div class="time" @click="toggleTime('c:' + c.commentId)">
+            {{ displayTime('c:' + c.commentId, c.createdAt) }}
+          </div>
+        </div>
+        <div class="comment-box">
+          <textarea v-model="commentText[post.postId]" rows="1" maxlength="500" placeholder="写评论…"
+                    :data-post="post.postId"
+                    @input="onCommentInput(post.postId, $event)"
+                    @keydown="onCommentKeydown(post.postId, $event)"></textarea>
+          <button class="primary small" :disabled="sendingComment[post.postId]"
+                  @click="sendComment(post.postId)">发送</button>
+        </div>
+      </div>
+    </article>
+  `,
+};
+
 createApp({
+  components: { PostCard },
   setup() {
     const token = ref(Api.token);
     const tokenFocus = ref(false);
@@ -49,61 +328,57 @@ createApp({
     const loading = ref(false);
     const error = ref('');
     const lightbox = reactive({ show: false, postId: null, index: 0 });
-    const expanded = reactive({});
     const draft = reactive({ text: '', files: [], previews: [], statuses: [], uploading: false });
     draft.text = localStorage.getItem(DRAFT_POST) || '';
     const comments = reactive({});
     const timeMode = reactive({});
     const commentText = reactive({});
     const sendingComment = reactive({});
-    const imgCache = reactive(new Map());
-    const loadingImgs = new Set();
     const fileInput = ref(null);
     const confirmState = reactive({ show: false, title: '', message: '', action: null });
 
-    const gridClass = (list) => list.length === 1 ? 'grid single' : 'grid';
-
-    function imgUrl(sha, mode) {
-      const key = sha + (mode ? '@' + mode : '');
-      if (imgCache.has(key)) return imgCache.get(key);
-      if (!loadingImgs.has(key)) {
-        loadingImgs.add(key);
-        Api.mediaBlob(sha, mode)
-          .then((blob) => { imgCache.set(key, URL.createObjectURL(blob)); })
-          .catch(() => { imgCache.set(key, ''); });
+    // ---- 全屏大图（根级，独立缓存，关闭时释放） ----
+    const lbCache = reactive(new Map());
+    const lbLoading = new Set();
+    function lbImgUrl(sha) {
+      if (!sha) return '';
+      if (lbCache.has(sha)) return lbCache.get(sha);
+      if (!lbLoading.has(sha)) {
+        lbLoading.add(sha);
+        Api.mediaBlob(sha)
+          .then((blob) => {
+            const old = lbCache.get(sha);
+            if (old) URL.revokeObjectURL(old);
+            lbCache.set(sha, URL.createObjectURL(blob));
+          })
+          .catch(() => lbCache.set(sha, ''));
       }
       return '';
     }
 
-    function clearImgCache() {
-      for (const url of imgCache.values()) {
-        if (url) URL.revokeObjectURL(url);
-      }
-      imgCache.clear();
-      loadingImgs.clear();
-    }
-
-    function openLightbox(postId, sha) {
+    function openLightbox(postId, index) {
       const p = posts.value.find((x) => x.postId === postId);
-      if (!p) return;
+      if (!p || !p.mediaContent.length) return;
+      clearTimeout(tapCloseTimer);
+      lastTap = 0;
       lightbox.postId = postId;
-      lightbox.index = Math.max(0, p.mediaContent.findIndex((m) => m.sha256 === sha));
+      lightbox.index = Math.max(0, Math.min(index, p.mediaContent.length - 1));
       resetZoom();
       lightbox.show = true;
-      p.mediaContent.forEach((m) => imgUrl(m.sha256));
-      nextTick(measureLb);
+      nextTick(() => {
+        lbImgUrl(currentSha());
+        measureLb();
+      });
     }
 
     function lbList() {
       const p = posts.value.find((x) => x.postId === lightbox.postId);
       return p ? p.mediaContent : [];
     }
-
     function currentSha() {
       const list = lbList();
       return list[lightbox.index]?.sha256 || '';
     }
-
     function lbStep(d) {
       const list = lbList();
       const next = lightbox.index + d;
@@ -112,20 +387,24 @@ createApp({
         resetZoom();
       }
     }
-
     function lbCan(d) {
       const list = lbList();
       const next = lightbox.index + d;
       return next >= 0 && next < list.length;
     }
-
     function closeLightbox() {
       if (suppressClick) {
         suppressClick = false;
         return;
       }
+      clearTimeout(tapCloseTimer);
       lightbox.show = false;
       resetZoom();
+      for (const url of lbCache.values()) {
+        if (url) URL.revokeObjectURL(url);
+      }
+      lbCache.clear();
+      lbLoading.clear();
     }
 
     let suppressClick = false;
@@ -138,36 +417,32 @@ createApp({
       scale: 1, tx: 0, ty: 0, anim: false, fading: false,
       box: { w: 0, h: 0 }, stage: { w: 0, h: 0, left: 0, top: 0 },
     });
-    const lbImgEl = ref(null);
     let lastTap = 0;
+    let tapCloseTimer = null;
 
     function measureLb() {
-      const el = lbImgEl.value;
+      const el = document.querySelector('.lb-stage img');
       if (!el) return;
       const stage = el.parentElement;
       const sr = stage.getBoundingClientRect();
       lbZoom.stage = { w: sr.width, h: sr.height, left: sr.left, top: sr.top };
       lbZoom.box = { w: el.offsetWidth, h: el.offsetHeight };
     }
-
     function lbMaxPan() {
       return {
         x: Math.max(0, (lbZoom.box.w * lbZoom.scale - lbZoom.stage.w) / 2),
         y: Math.max(0, (lbZoom.box.h * lbZoom.scale - lbZoom.stage.h) / 2),
       };
     }
-
     function lbClamp() {
       const m = lbMaxPan();
       lbZoom.tx = Math.max(-m.x, Math.min(m.x, lbZoom.tx));
       lbZoom.ty = Math.max(-m.y, Math.min(m.y, lbZoom.ty));
     }
-
     function lbStagePoint(x, y) {
       const s = lbZoom.stage;
       return { x: x - (s.w ? s.left : 0), y: y - (s.h ? s.top : 0) };
     }
-
     function setZoom(scale, tx, ty, animate, anchor = null, allowBelowOne = false) {
       const s0 = Math.max(lbZoom.scale, 0.01);
       const s1 = allowBelowOne
@@ -192,7 +467,6 @@ createApp({
       if (animate) setTimeout(() => { lbZoom.anim = false; }, 220);
       else lbZoom.anim = false;
     }
-
     function resetZoom() {
       lbZoom.scale = 1;
       lbZoom.tx = 0;
@@ -200,7 +474,6 @@ createApp({
       lbZoom.anim = false;
       lbZoom.fading = false;
     }
-
     function lbImgStyle() {
       let opacity = 1;
       if (lbZoom.fading) {
@@ -216,7 +489,6 @@ createApp({
         cursor: lbZoom.scale > 1 ? 'grab' : 'zoom-in',
       };
     }
-
     function fadeOutAndClose() {
       lbZoom.fading = true;
       lbZoom.anim = true;
@@ -224,7 +496,6 @@ createApp({
       setTimeout(() => { lbZoom.anim = false; }, 160);
       setTimeout(() => closeLightbox(), 160);
     }
-
     function toggleZoom(e) {
       if (lbZoom.scale > 1) {
         setZoom(1, 0, 0, true);
@@ -232,17 +503,24 @@ createApp({
         setZoom(2, lbZoom.tx, lbZoom.ty, true, lbStagePoint(e.clientX, e.clientY));
       }
     }
-
     function onImgClick(e) {
+      if (suppressClick) {
+        suppressClick = false;
+        return;
+      }
       const now = Date.now();
       if (now - lastTap < 300) {
+        clearTimeout(tapCloseTimer);
         toggleZoom(e);
         lastTap = 0;
         return;
       }
       lastTap = now;
+      clearTimeout(tapCloseTimer);
+      tapCloseTimer = setTimeout(() => {
+        if (!suppressClick) closeLightbox();
+      }, 400);
     }
-
     function onLbWheel(e) {
       const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
       const next = lbZoom.scale * factor;
@@ -363,203 +641,10 @@ createApp({
       else if (e.key === 'ArrowLeft') lbStep(-1);
     });
 
-    function collapse(postId) {
-      if (suppressClick) {
-        suppressClick = false;
-        return;
-      }
-      expanded[postId] = null;
-    }
-
-    function expList(postId) {
-      const p = posts.value.find((x) => x.postId === postId);
-      return p ? p.mediaContent : [];
-    }
-
-    function expSha(postId) {
-      const list = expList(postId);
-      return list[expanded[postId] ?? 0]?.sha256 || '';
-    }
-
-    function expStep(postId, d) {
-      const list = expList(postId);
-      const next = (expanded[postId] ?? 0) + d;
-      if (next >= 0 && next < list.length) expanded[postId] = next;
-    }
-
-    const expCarousel = reactive({ postId: null, dx: 0, dragging: false, snapping: false, width: 0 });
-    const expHeight = reactive({});
-    let expStart = 0;
-    let expStartY = 0;
-
-    function expStartDrag(postId, x, width) {
-      if (expCarousel.dragging) return;
-      expCarousel.postId = postId;
-      expCarousel.dragging = true;
-      expCarousel.snapping = false;
-      expCarousel.dx = 0;
-      expCarousel.width = width || 300;
-      expStart = x;
-    }
-
-    function expFinishDrag(postId) {
-      if (!expCarousel.dragging || expCarousel.postId !== postId) return;
-      const w = expCarousel.width || 300;
-      const dx = expCarousel.dx;
-      const threshold = Math.min(80, w * 0.28);
-      const hasTarget = dx < 0 ? !!expNextSha(postId) : !!expPrevSha(postId);
-      if (Math.abs(dx) < threshold || !hasTarget) {
-        snapExpBack(postId);
-      } else {
-        snapExpTo(postId, dx < 0 ? 1 : -1);
-      }
-    }
-
-    function snapExpBack(postId) {
-      expCarousel.snapping = true;
-      expCarousel.dx = 0;
-      setTimeout(() => expResetDrag(postId), 220);
-    }
-
-    function snapExpTo(postId, d) {
-      expCarousel.snapping = true;
-      expCarousel.dx = -d * expCarousel.width;
-      setTimeout(() => {
-        expResetDrag(postId);
-        expStep(postId, d);
-        swallowNextClick();
-      }, 220);
-    }
-
-    function expResetDrag(postId) {
-      if (expCarousel.postId !== postId) return;
-      expCarousel.dragging = false;
-      expCarousel.snapping = false;
-      expCarousel.dx = 0;
-      expCarousel.postId = null;
-    }
-
-    function expNextSha(postId) {
-      const list = expList(postId);
-      return list[(expanded[postId] ?? 0) + 1]?.sha256 || '';
-    }
-
-    function expPrevSha(postId) {
-      const list = expList(postId);
-      const i = (expanded[postId] ?? 0) - 1;
-      return i >= 0 ? (list[i]?.sha256 || '') : '';
-    }
-
-    function expStageStyle(postId) {
-      const h = expHeight[postId];
-      return h ? { height: h + 'px' } : {};
-    }
-
-    function openExpanded(postId, i) {
-      expanded[postId] = i;
-      const p = posts.value.find((x) => x.postId === postId);
-      if (!p || !p.mediaContent.length) return;
-      measureExpHeight(postId, p.mediaContent);
-    }
-
-    function applyExpHeight(postId, maxRatio) {
-      if (!maxRatio) return;
-      const el = document.querySelector(`.post-expand[data-post="${postId}"] .exp-stage`);
-      const width = el ? el.clientWidth : 300;
-      expHeight[postId] = Math.round(Math.min(window.innerHeight * 0.72, width * maxRatio));
-    }
-
-    function measureExpHeight(postId, mediaList) {
-      const known = mediaList.filter((m) => m.width > 0 && m.height > 0);
-      if (known.length === mediaList.length) {
-        applyExpHeight(postId, Math.max(...mediaList.map((m) => m.height / m.width)));
-        return;
-      }
-      // 旧数据缺尺寸：不计算，等原图请求懒修复后自然补上
-    }
-
-    function expCurrentStyle(postId) {
-      const c = expCarousel;
-      if (c.postId !== postId || !c.dragging) return {};
-      return {
-        transform: `translateX(${c.dx}px)`,
-        transition: c.snapping ? 'transform .22s ease' : 'none',
-      };
-    }
-
-    function expNextStyle(postId) {
-      const c = expCarousel;
-      if (c.postId !== postId || !c.dragging || c.dx >= 0) return { display: 'none' };
-      return {
-        transform: `translateX(calc(100% + ${c.dx}px))`,
-        transition: c.snapping ? 'transform .22s ease' : 'none',
-      };
-    }
-
-    function expPrevStyle(postId) {
-      const c = expCarousel;
-      if (c.postId !== postId || !c.dragging || c.dx <= 0) return { display: 'none' };
-      return {
-        transform: `translateX(calc(-100% + ${c.dx}px))`,
-        transition: c.snapping ? 'transform .22s ease' : 'none',
-      };
-    }
-
-    function onExpTouchStart(postId, e) {
-      if (e.touches.length >= 2) {
-        // 双指捏合 → 直接进入全屏大图
-        swallowNextClick();
-        expResetDrag(postId);
-        openLightbox(postId, expSha(postId));
-        return;
-      }
-      if (expCarousel.dragging) return;
-      const t = e.changedTouches[0];
-      expStart = t.clientX;
-      expStartY = t.clientY;
-      const stage = e.currentTarget.querySelector('.exp-stage');
-      expStartDrag(postId, t.clientX, stage ? stage.clientWidth : 300);
-    }
-    function onExpTouchMove(e) {
-      if (!expCarousel.dragging) return;
-      const t = e.changedTouches[0];
-      const dx = t.clientX - expStart;
-      const dy = t.clientY - expStartY;
-      if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8) {
-        e.preventDefault();
-        expCarousel.dx = dx;
-      } else if (Math.abs(dy) > 12) {
-        expResetDrag(expCarousel.postId);
-      }
-    }
-    function onExpTouchEnd(postId, e) {
-      expFinishDrag(postId);
-    }
-    function onExpTouchCancel() {
-      expResetDrag(expCarousel.postId);
-    }
-
-    function onExpMouseDown(postId, e) {
-      if (expCarousel.dragging) return;
-      const stage = e.currentTarget.querySelector('.exp-stage');
-      expStartDrag(postId, e.clientX, stage ? stage.clientWidth : 300);
-      window.addEventListener('mousemove', onExpMouseMove);
-      window.addEventListener('mouseup', onExpMouseUp);
-    }
-    function onExpMouseMove(e) {
-      if (!expCarousel.dragging) return;
-      expCarousel.dx = e.clientX - expStart;
-    }
-    function onExpMouseUp() {
-      window.removeEventListener('mousemove', onExpMouseMove);
-      window.removeEventListener('mouseup', onExpMouseUp);
-      expFinishDrag(expCarousel.postId);
-    }
-
+    // ---- 评论 / 时间 ----
     function toggleTime(key) {
       timeMode[key] = !timeMode[key];
     }
-
     function displayTime(key, sec) {
       return timeMode[key] ? fullTime(sec) : fmtTime(sec);
     }
@@ -583,12 +668,10 @@ createApp({
       confirmState.action = action;
       confirmState.show = true;
     }
-
     function confirmNo() {
       confirmState.show = false;
       confirmState.action = null;
     }
-
     function confirmYes() {
       const fn = confirmState.action;
       confirmState.show = false;
@@ -606,7 +689,6 @@ createApp({
         if (page.value > totalPages.value) page.value = totalPages.value;
         syncPageUrl();
         posts.value = (await Api.listPosts(page.value)).items;
-        clearImgCache();
         await Promise.all(posts.value.map(async (p) => {
           try {
             comments[p.postId] = (await Api.comments(p.postId)).items;
@@ -633,7 +715,6 @@ createApp({
       syncPageUrl();
       loadFeed();
     }
-
     function syncPageUrl() {
       const url = new URL(location.href);
       if (page.value > 1) url.searchParams.set('page', page.value);
@@ -657,7 +738,6 @@ createApp({
         error.value = e.message;
       }
     }
-
     function logout() {
       Api.token = '';
       localStorage.removeItem('ms_token');
@@ -669,21 +749,19 @@ createApp({
 
     function onPick(e) {
       for (const f of e.target.files) {
-      if (!f.type.startsWith('image/')) continue;
-      draft.files.push(f);
-      draft.previews.push(URL.createObjectURL(f));
-      draft.statuses.push('done');
+        if (!f.type.startsWith('image/')) continue;
+        draft.files.push(f);
+        draft.previews.push(URL.createObjectURL(f));
+        draft.statuses.push('done');
       }
       e.target.value = '';
     }
-
     function removeDraft(i) {
       URL.revokeObjectURL(draft.previews[i]);
       draft.files.splice(i, 1);
       draft.previews.splice(i, 1);
       draft.statuses.splice(i, 1);
     }
-
     async function submitPost() {
       const text = draft.text.trim();
       if (!text && !draft.files.length) return;
@@ -746,30 +824,25 @@ createApp({
       el.style.height = 'auto';
       el.style.height = Math.min(el.scrollHeight, 120) + 'px';
     }
-
     function growDraft(e) {
       const el = e.target;
       el.style.height = 'auto';
       el.style.height = el.scrollHeight + 'px';
     }
-
     function saveSoon(key, value, timers) {
       clearTimeout(timers[key]);
       timers[key] = setTimeout(() => {
         try { localStorage.setItem(key, value); } catch {}
       }, 1000);
     }
-
     function onDraftInput(e) {
       growDraft(e);
       saveSoon(DRAFT_POST, draft.text, draftTimers);
     }
-
     function onCommentInput(postId, e) {
       growComment(e);
       saveSoon(draftCommentKey(postId), commentText[postId], commentTimers);
     }
-
     function onCommentKeydown(postId, e) {
       if (e.isComposing) return;
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -783,13 +856,12 @@ createApp({
       openConfirm('删除评论', `删除后不可恢复要删除 「${snippet(c?.content)}」 吗？`, async () => {
         try {
           await Api.deleteComment(commentId);
-          comments[postId] = (comments[postId] || []).filter((c) => c.commentId !== commentId);
+          comments[postId] = (comments[postId] || []).filter((x) => x.commentId !== commentId);
         } catch (e) {
           error.value = e.message;
         }
       });
     }
-
     function removePost(postId) {
       const p = posts.value.find((x) => x.postId === postId);
       openConfirm('删除动态', `删除后不可恢复。确认要删除 「${snippet(p?.textContent)}」 吗？`, async () => {
@@ -803,32 +875,29 @@ createApp({
       });
     }
 
+    provide('app', {
+      me, comments, commentText, sendingComment,
+      removePost, openLightbox,
+      sendComment, onCommentInput, onCommentKeydown, removeComment,
+      toggleTime, displayTime,
+    });
+
     if (Api.token) login();
 
     return {
       token, tokenFocus, me, posts, page, totalPages, loading, error, lightbox,
-      expanded, collapse,
-      draft, comments, commentText, sendingComment, fileInput,
+      draft, fileInput,
       login, logout, loadFeed, goPage, onPick, removeDraft, submitPost,
-      sendComment, growComment, onCommentKeydown, removeComment, removePost, imgUrl, fmtTime, fullTime,
-      onDraftInput, onCommentInput,
-      toggleTime, displayTime, ringStyle, gridClass,
-      avatarStyle,
+      onDraftInput, ringStyle,
       confirmState, confirmNo, confirmYes,
-      openLightbox, closeLightbox, lbStep, lbCan, currentSha, lbList,
+      lbImgUrl, currentSha, lbList, lbCan, lbStep, closeLightbox,
       onLbTouchStart, onLbTouchMove, onLbTouchEnd, onLbTouchCancel,
-      onLbMouseDown, onLbWheel, onImgClick, lbImgStyle,
-      lbImgEl, measureLb,
-      expList, expSha, expStep, expNextSha, expPrevSha,
-      expStageStyle, openExpanded,
-      expCurrentStyle, expNextStyle, expPrevStyle,
-      onExpTouchStart, onExpTouchMove, onExpTouchEnd, onExpTouchCancel,
-      onExpMouseDown,
+      onLbMouseDown, onLbWheel, onImgClick, lbImgStyle, measureLb,
     };
   },
   template: `
     <div v-if="!me" class="login">
-        <h1>MiniSpace <span class="ver">v33</span></h1>
+        <h1>MiniSpace <span class="ver">v42</span></h1>
         <p class="sub">填入你的访问 token 进入</p>
         <div class="login-box">
           <input v-model="token" :placeholder="tokenFocus ? '' : 'token'" autocomplete="off"
@@ -842,7 +911,7 @@ createApp({
     <div v-else class="wrap">
       <div class="feed">
         <header class="topbar">
-          <div class="brand">MiniSpace <span class="ver">v33</span></div>
+          <div class="brand">MiniSpace <span class="ver">v42</span></div>
           <div class="who">{{ me.nickname }} <button class="link" @click="logout">退出</button></div>
         </header>
 
@@ -873,63 +942,7 @@ createApp({
 
         <p v-if="error" class="error">{{ error }}</p>
 
-        <article v-for="p in posts" :key="p.postId" class="post card">
-          <header>
-            <span class="avatar" :style="avatarStyle(p.userId)">{{ p.nickname[0] }}</span>
-            <div class="meta">
-              <div class="nick">{{ p.nickname }}</div>
-              <div class="time" @click="toggleTime('p:' + p.postId)">
-                {{ displayTime('p:' + p.postId, p.createdAt) }}
-              </div>
-            </div>
-            <button v-if="p.userId === me.userId" class="link del" @click="removePost(p.postId)">删除</button>
-          </header>
-          <p class="text">{{ p.textContent }}</p>
-          <div v-if="typeof expanded[p.postId] === 'number'" class="post-expand"
-               @touchstart="onExpTouchStart(p.postId, $event)"
-               @touchmove="onExpTouchMove"
-               @touchend="onExpTouchEnd(p.postId, $event)"
-               @touchcancel="onExpTouchCancel"
-               @mousedown.prevent="onExpMouseDown(p.postId, $event)">
-            <div class="exp-stage" :data-post="p.postId" :style="expStageStyle(p.postId)">
-              <img v-if="expPrevSha(p.postId)" class="exp-img" :src="imgUrl(expPrevSha(p.postId))"
-                   :style="expPrevStyle(p.postId)" draggable="false">
-              <img class="exp-img" :src="imgUrl(expSha(p.postId))"
-                   :style="expCurrentStyle(p.postId)" draggable="false"
-                   @click="collapse(p.postId)">
-              <img v-if="expNextSha(p.postId)" class="exp-img" :src="imgUrl(expNextSha(p.postId))"
-                   :style="expNextStyle(p.postId)" draggable="false">
-            </div>
-            <div class="expand-bar">
-              <button class="ghost small" @click="collapse(p.postId)">收起</button>
-              <span class="exp-count">{{ (expanded[p.postId] ?? 0) + 1 }} / {{ expList(p.postId).length }}</span>
-              <button class="primary small" @click="openLightbox(p.postId, expSha(p.postId))">⛶ 大图</button>
-            </div>
-          </div>
-          <div v-else-if="p.mediaContent.length" :class="gridClass(p.mediaContent)">
-            <img v-for="(m, i) in p.mediaContent" :key="i" :src="imgUrl(m.sha256, 'small')" loading="lazy"
-                 @click="openExpanded(p.postId, i)">
-          </div>
-          <div class="comments">
-            <p v-if="!(comments[p.postId] || []).length" class="no-comment">还没有评论</p>
-            <div v-for="c in comments[p.postId] || []" :key="c.commentId" class="comment">
-              <b>{{ c.nickname }}</b>{{ c.content }}
-              <button v-if="c.userId === me.userId" class="link del small-del"
-                      @click="removeComment(p.postId, c.commentId)">删除</button>
-              <div class="time" @click="toggleTime('c:' + c.commentId)">
-                {{ displayTime('c:' + c.commentId, c.createdAt) }}
-              </div>
-            </div>
-            <div class="comment-box">
-              <textarea v-model="commentText[p.postId]" rows="1" maxlength="500" placeholder="写评论…"
-                        :data-post="p.postId"
-                        @input="onCommentInput(p.postId, $event)"
-                        @keydown="onCommentKeydown(p.postId, $event)"></textarea>
-              <button class="primary small" :disabled="sendingComment[p.postId]"
-                      @click="sendComment(p.postId)">发送</button>
-            </div>
-          </div>
-        </article>
+        <post-card v-for="p in posts" :key="p.postId" :post="p"></post-card>
 
         <div v-if="totalPages > 1" class="pager">
           <button class="ghost" :disabled="page <= 1 || loading" @click="goPage(page - 1)">上一页</button>
@@ -947,8 +960,8 @@ createApp({
            @mousedown.prevent="onLbMouseDown" @wheel.prevent="onLbWheel">
         <div class="lb-stage">
           <transition name="lb-slide" mode="out-in">
-            <img :key="lightbox.index" :src="imgUrl(currentSha())" :style="lbImgStyle()"
-                 ref="lbImgEl" @load="measureLb" @click.stop="onImgClick">
+            <img :key="lightbox.index" :src="lbImgUrl(currentSha())" :style="lbImgStyle()"
+                 @load="measureLb" @click.stop="onImgClick">
           </transition>
         </div>
         <button v-if="lbList().length > 1" class="lb-nav prev" :class="{ off: !lbCan(-1) }"
