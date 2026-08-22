@@ -1,4 +1,4 @@
-const { createApp, ref, reactive, nextTick, inject, provide, onUnmounted } = Vue;
+const { createApp, ref, reactive, nextTick, inject, provide, onMounted, onUnmounted } = Vue;
 console.log('[MiniSpace] frontend v37');
 
 // 阻止页面级双指缩放（lightbox 内捏合本来就会 preventDefault，不受影响）
@@ -49,6 +49,8 @@ const PostCard = {
     const expanded = reactive({});
     const expCarousel = reactive({ postId: null, dx: 0, dragging: false, snapping: false, width: 0 });
     const expHeight = reactive({});
+    const singleImg = reactive({ w: 0, h: 0, ready: false, loaded: false });
+    const stageLoaded = ref(false);
     let expStart = 0;
     let expStartY = 0;
     let suppressClick = false;
@@ -66,6 +68,7 @@ const PostCard = {
     }
 
     onUnmounted(() => {
+      window.removeEventListener('resize', measureSingle);
       for (const url of cache.values()) {
         if (url) URL.revokeObjectURL(url);
       }
@@ -236,6 +239,40 @@ const PostCard = {
     function singleAspect(m) {
       return m.width && m.height ? { aspectRatio: m.width + ' / ' + m.height } : {};
     }
+    function applySingleSize(ow, oh) {
+      if (media.length !== 1 || !ow || !oh) return;
+      const el = document.querySelector(`.grid.single[data-post="${postId}"]`);
+      if (!el) return;
+      const cw = el.clientWidth || 300;
+      const ratio = oh / ow;
+      let w = cw;
+      let h = w * ratio;
+      if (h > 480) {
+        h = 480;
+        w = h / ratio;
+      }
+      singleImg.w = Math.max(1, Math.round(w));
+      singleImg.h = Math.max(1, Math.round(h));
+      singleImg.ready = true;
+    }
+    function measureSingle() {
+      const m = media[0];
+      if (m && m.width > 0 && m.height > 0) applySingleSize(m.width, m.height);
+    }
+    function onSingleLoad(e) {
+      const n = e.target;
+      // 以真实显示尺寸为准：覆盖旧数据 0 尺寸与 EXIF 旋转方向不一致两种情况
+      if (n.naturalWidth && n.naturalHeight) applySingleSize(n.naturalWidth, n.naturalHeight);
+      singleImg.loaded = true;
+    }
+    function onExpImgLoad() {
+      stageLoaded.value = true;
+    }
+
+    onMounted(() => {
+      nextTick(measureSingle);
+      window.addEventListener('resize', measureSingle);
+    });
 
     return {
       post: props.post,
@@ -246,7 +283,8 @@ const PostCard = {
       onCommentKeydown: app.onCommentKeydown, removeComment: app.removeComment,
       toggleTime: app.toggleTime, displayTime: app.displayTime,
       avatarStyle, fmtTime, fullTime, gridClass,
-      singleAspect,
+      singleAspect, singleImg, onSingleLoad,
+      stageLoaded, onExpImgLoad,
       imgUrl, media, expanded,
       expSha, expNextSha, expPrevSha, expStep, collapse,
       expStageStyle, expCurrentStyle, expNextStyle, expPrevStyle,
@@ -273,10 +311,11 @@ const PostCard = {
            @touchend="onExpTouchEnd"
            @touchcancel="onExpTouchCancel"
            @mousedown.prevent="onExpMouseDown($event)">
-        <div class="exp-stage" :data-post="post.postId" :style="expStageStyle()">
+        <div class="exp-stage" :class="{ 'stage-loaded': stageLoaded }"
+             :data-post="post.postId" :style="expStageStyle()">
           <img v-if="expPrevSha()" class="exp-img" :src="imgUrl(expPrevSha(), 'medium')"
                :style="expPrevStyle()" draggable="false">
-          <img class="exp-img" :src="imgUrl(expSha(), 'medium')"
+          <img class="exp-img" :src="imgUrl(expSha(), 'medium')" @load="onExpImgLoad"
                :style="expCurrentStyle()" draggable="false"
                @click="collapse()">
           <img v-if="expNextSha()" class="exp-img" :src="imgUrl(expNextSha(), 'medium')"
@@ -288,10 +327,14 @@ const PostCard = {
           <button class="primary small" @click="openLightbox(post.postId, expanded[post.postId] ?? 0)">⛶ 大图</button>
         </div>
       </div>
-      <div v-else-if="media.length" :class="gridClass(media)">
+      <div v-else-if="media.length" :class="gridClass(media)" :data-post="post.postId">
         <img v-for="(m, i) in media" :key="i"
              :src="imgUrl(m.sha256, media.length === 1 ? 'medium' : 'small')"
-             :style="media.length === 1 ? singleAspect(m) : undefined" loading="lazy"
+             :style="media.length === 1 && singleImg.ready
+               ? { width: singleImg.w + 'px', height: singleImg.h + 'px' }
+               : (media.length === 1 ? singleAspect(m) : undefined)"
+             :class="media.length === 1 && singleImg.loaded ? 'img-loaded' : undefined"
+             loading="lazy" @load="onSingleLoad"
              @click="openExpanded(i)">
       </div>
       <div class="comments">
@@ -902,7 +945,7 @@ createApp({
   },
   template: `
     <div v-if="!me" class="login">
-        <h1>MiniSpace <span class="ver">v43</span></h1>
+        <h1>MiniSpace <span class="ver">v48</span></h1>
         <p class="sub">填入你的访问 token 进入</p>
         <div class="login-box">
           <input v-model="token" :placeholder="tokenFocus ? '' : 'token'" autocomplete="off"
@@ -916,7 +959,7 @@ createApp({
     <div v-else class="wrap">
       <div class="feed">
         <header class="topbar">
-          <div class="brand">MiniSpace <span class="ver">v43</span></div>
+          <div class="brand">MiniSpace <span class="ver">v48</span></div>
           <div class="who">{{ me.nickname }} <button class="link" @click="logout">退出</button></div>
         </header>
 

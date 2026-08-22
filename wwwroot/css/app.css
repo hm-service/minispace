@@ -101,6 +101,9 @@ body {
 
 button { font: inherit; cursor: pointer; border: none; background: none; color: inherit; }
 
+/* 空 src 的图片不渲染（避免浏览器画“破图小图标”），骨架层透出 */
+img[src=""] { visibility: hidden; }
+
 input, textarea {
   font: inherit; color: var(--text);
   border: 1px solid var(--border); border-radius: var(--radius-md);
@@ -234,8 +237,12 @@ input:focus, textarea:focus {
   100% { background-position: -120% 0; }
 }
 .grid img:hover { filter: brightness(0.95); }
-.grid.single { grid-template-columns: 1fr; max-width: 70%; }
-.grid.single img { aspect-ratio: auto; max-height: 480px; object-fit: contain; }
+.grid.single {
+  grid-template-columns: 1fr; max-width: 70%;
+  border-radius: 0; overflow: visible;
+}
+.grid.single img { aspect-ratio: auto; max-height: 480px; object-fit: contain; border-radius: var(--radius-md); }
+.grid.single img.img-loaded { animation: none; background: var(--surface-muted); }
 
 /* 卡片内大图 */
 .post-expand { margin-top: var(--space-3); }
@@ -247,8 +254,13 @@ input:focus, textarea:focus {
 .exp-count { color: var(--text-muted); font-size: var(--text-sm); }
 .exp-stage {
   position: relative; width: 100%; height: auto; max-height: 72vh;
-  min-height: 160px; overflow: hidden; border-radius: var(--radius-md); background: var(--surface-muted);
+  min-height: 160px; overflow: hidden; border-radius: var(--radius-md);
+  background:
+    linear-gradient(110deg, #eceef2 8%, #f5f6f8 18%, #eceef2 33%) 0 0 / 220% 100% no-repeat,
+    var(--surface-muted);
+  animation: img-shimmer 1.6s ease-in-out infinite;
 }
+.exp-stage.stage-loaded { animation: none; }
 .post-expand .exp-img {
   position: absolute; inset: 0; width: 100%; height: 100%;
   object-fit: contain; max-height: none; border-radius: 0;
