@@ -7,14 +7,17 @@ var builder = WebApplication.CreateBuilder(args);
 var contentRoot = builder.Environment.ContentRootPath;
 var dataDir = Environment.GetEnvironmentVariable("DATA_DIR");
 if (string.IsNullOrWhiteSpace(dataDir))
+{
     dataDir = Path.Combine(contentRoot, "data");
+}
 
 Directory.CreateDirectory(dataDir);
 AuditLog.Init(Path.Combine(dataDir, "log.txt"));
 
-builder.Services.AddDbContext<AppDbContext>(o =>
-    o.UseSqlite($"Data Source={Path.Combine(dataDir, "data.db")}"));
-builder.Services.AddOpenApi();
+builder.Services
+    .AddDbContext<AppDbContext>(
+        o => o.UseSqlite($"Data Source={Path.Combine(dataDir, "data.db")}"))
+    .AddOpenApi();
 
 var app = builder.Build();
 
@@ -30,6 +33,12 @@ using (var scope = app.Services.CreateScope())
 }
 
 app.UseDefaultFiles();
+app.Use(async (context, next) =>
+{
+    if (context.Request.Path == "/" || context.Request.Path == "/index.html")
+        context.Response.Headers.CacheControl = "no-cache";
+    await next();
+});
 app.UseStaticFiles();
 
 if (app.Environment.IsDevelopment())

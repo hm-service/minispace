@@ -25,11 +25,24 @@ const Api = {
   },
 
   login: () => Api.request('POST', '/api/login'),
-  upload: (file) => {
+  upload: (file, onProgress) => new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/media');
+    if (Api.token) xhr.setRequestHeader('Authorization', 'Bearer ' + Api.token);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
+    };
+    xhr.onload = () => {
+      let data = null;
+      try { data = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else reject(new Error((data && data.message) || '上传失败 (' + xhr.status + ')'));
+    };
+    xhr.onerror = () => reject(new Error('网络错误，上传失败'));
     const fd = new FormData();
     fd.append('file', file);
-    return Api.request('POST', '/api/media', fd);
-  },
+    xhr.send(fd);
+  }),
   createPost: (textContent, mediaContent) =>
     Api.request('POST', '/api/posts', { textContent, mediaContent }),
   postMetadata: () => Api.request('GET', '/api/posts/metadata'),
