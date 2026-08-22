@@ -222,8 +222,16 @@ input:focus, textarea:focus {
 }
 .grid img {
   width: 100%; height: auto; aspect-ratio: 1 / 1;
-  object-fit: cover; display: block; background: var(--surface-muted); cursor: zoom-in;
+  object-fit: cover; display: block; cursor: zoom-in;
+  background:
+    linear-gradient(110deg, #eceef2 8%, #f5f6f8 18%, #eceef2 33%) 0 0 / 220% 100% no-repeat,
+    var(--surface-muted);
+  animation: img-shimmer 1.6s ease-in-out infinite;
   transition: filter var(--dur-fast) var(--ease);
+}
+@keyframes img-shimmer {
+  0% { background-position: 120% 0; }
+  100% { background-position: -120% 0; }
 }
 .grid img:hover { filter: brightness(0.95); }
 .grid.single { grid-template-columns: 1fr; max-width: 70%; }

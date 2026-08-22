@@ -233,6 +233,9 @@ const PostCard = {
     }
 
     const gridClass = (list) => list.length === 1 ? 'grid single' : 'grid';
+    function singleAspect(m) {
+      return m.width && m.height ? { aspectRatio: m.width + ' / ' + m.height } : {};
+    }
 
     return {
       post: props.post,
@@ -243,6 +246,7 @@ const PostCard = {
       onCommentKeydown: app.onCommentKeydown, removeComment: app.removeComment,
       toggleTime: app.toggleTime, displayTime: app.displayTime,
       avatarStyle, fmtTime, fullTime, gridClass,
+      singleAspect,
       imgUrl, media, expanded,
       expSha, expNextSha, expPrevSha, expStep, collapse,
       expStageStyle, expCurrentStyle, expNextStyle, expPrevStyle,
@@ -286,7 +290,8 @@ const PostCard = {
       </div>
       <div v-else-if="media.length" :class="gridClass(media)">
         <img v-for="(m, i) in media" :key="i"
-             :src="imgUrl(m.sha256, media.length === 1 ? 'medium' : 'small')" loading="lazy"
+             :src="imgUrl(m.sha256, media.length === 1 ? 'medium' : 'small')"
+             :style="media.length === 1 ? singleAspect(m) : undefined" loading="lazy"
              @click="openExpanded(i)">
       </div>
       <div class="comments">
@@ -897,7 +902,7 @@ createApp({
   },
   template: `
     <div v-if="!me" class="login">
-        <h1>MiniSpace <span class="ver">v42</span></h1>
+        <h1>MiniSpace <span class="ver">v43</span></h1>
         <p class="sub">填入你的访问 token 进入</p>
         <div class="login-box">
           <input v-model="token" :placeholder="tokenFocus ? '' : 'token'" autocomplete="off"
@@ -911,7 +916,7 @@ createApp({
     <div v-else class="wrap">
       <div class="feed">
         <header class="topbar">
-          <div class="brand">MiniSpace <span class="ver">v42</span></div>
+          <div class="brand">MiniSpace <span class="ver">v43</span></div>
           <div class="who">{{ me.nickname }} <button class="link" @click="logout">退出</button></div>
         </header>
 
