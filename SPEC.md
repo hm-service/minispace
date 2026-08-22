@@ -8,44 +8,56 @@
 
 说明：用户与登录 token 由管理员手动预设，无注册/管理接口。
 
-| 方法 | 路径 | 请求体 | 响应体 | 鉴权 | 说明 |
-| ---- | ---- | ------ | ------ | ---- | ---- |
-| POST | /api/login | 无 | LoginResult | Bearer token | 400 空 token；401 无效 token |
+| 方法 | 路径       | 请求体 | 响应体      | 鉴权         | 说明                         |
+| ---- | ---------- | ------ | ----------- | ------------ | ---------------------------- |
+| POST | /api/login | 无     | LoginResult | Bearer token | 400 空 token；401 无效 token |
 
 ### 1.2. 帖子
 
 说明：前端依据 metadata 的 totalCount 计算总页数并做页导航，列表接口不返回 hasMore。
 
-| 方法 | 路径 | 请求体 | 响应体 | 鉴权 | 说明 |
-| ---- | ---- | ------ | ------ | ---- | ---- |
-| POST | /api/posts | CreatePostRequest | PostDto | Bearer token | textContent 与 mediaContent 都为空返回 400；textContent 最多 10000 字；mediaContent 元素须为已上传的 SHA256（编辑阶段先经 POST /api/media 上传，由后端计算返回），重复元素原样保留，存在未上传元素返回 400；成功 201，Location 指回帖子；401（未登录） |
-| GET | /api/posts/metadata | 无 | PostMetadata | Bearer token | totalCount 为有效（未删除）帖子总数；401（未登录） |
-| GET | /api/posts | 无 | PostList | Bearer token | page 从 1 开始，每页 10 条有效帖子，按创建时间倒序；page 小于等于 0 返回第一页，大于最大页返回最后一页；401（未登录） |
-| GET | /api/posts/{postId} | 无 | PostDto | Bearer token | 404 帖子不存在（含 is_deleted=1）；401（未登录） |
-| POST | /api/posts/{postId}/comments | CreateCommentRequest | CommentDto | Bearer token | content 最多 500 字；404 帖子不存在；401（未登录） |
-| GET | /api/posts/{postId}/comments | 无 | CommentList | Bearer token | 只返回有效评论，按创建时间倒序；404 帖子不存在；401（未登录） |
-| DELETE | /api/posts/{postId} | 无 | 无（204） | Bearer token | 仅作者可删，非作者返回 403；逻辑删除（is_deleted=1），删除后列表/详情不再返回；其评论与媒体文件保留；404 帖子不存在；401（未登录） |
+| 方法   | 路径                         | 请求体               | 响应体       | 鉴权         | 说明                                                                                                                                                                                                                                                   |
+| ------ | ---------------------------- | -------------------- | ------------ | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| POST   | /api/posts                   | CreatePostRequest    | PostDto      | Bearer token | textContent 与 mediaContent 都为空返回 400；textContent 最多 10000 字；mediaContent 元素须为已上传的 SHA256（编辑阶段先经 POST /api/media 上传，由后端计算返回），重复元素原样保留，存在未上传元素返回 400；成功 201，Location 指回帖子；401（未登录） |
+| GET    | /api/posts/metadata          | 无                   | PostMetadata | Bearer token | totalCount 为有效（未删除）帖子总数；401（未登录）                                                                                                                                                                                                     |
+| GET    | /api/posts                   | 无                   | PostList     | Bearer token | page 从 1 开始，每页 10 条有效帖子，按创建时间倒序；page 小于等于 0 返回第一页，大于最大页返回最后一页；401（未登录）                                                                                                                                  |
+| GET    | /api/posts/{postId}          | 无                   | PostDto      | Bearer token | 404 帖子不存在（含 is_deleted=1）；401（未登录）                                                                                                                                                                                                       |
+| POST   | /api/posts/{postId}/comments | CreateCommentRequest | CommentDto   | Bearer token | content 最多 500 字；404 帖子不存在；401（未登录）                                                                                                                                                                                                     |
+| GET    | /api/posts/{postId}/comments | 无                   | CommentList  | Bearer token | 只返回有效评论，按创建时间倒序；404 帖子不存在；401（未登录）                                                                                                                                                                                          |
+| DELETE | /api/posts/{postId}          | 无                   | 无（204）    | Bearer token | 仅作者可删，非作者返回 403；逻辑删除（is_deleted=1），删除后列表/详情不再返回；其评论与媒体文件保留；404 帖子不存在；401（未登录）                                                                                                                     |
 
 ### 1.3. 媒体文件
 
 说明：媒体文件为引用共享（多条帖子可引用同一 sha256），删除帖子/评论不会删除媒体文件。
 
-| 方法 | 路径 | 请求体 | 响应体 | 鉴权 | 说明 |
-| ---- | ---- | ------ | ------ | ---- | ---- |
-| GET | /media/{sha256} | 无 | 文件流 | Bearer token | 404 媒体不存在；401（未登录）；前端需带 Bearer token 用 fetch 获取 blob 后显示（`<img>` 无法携带请求头） |
-| POST | /api/media | multipart：file | MediaDto | Bearer token | 仅支持 jpg/jpeg/png/gif/webp/bmp，大小不超过 20MB；sha256 由后端计算，相同内容重复上传复用已有记录；400 类型或大小不符；401（未登录） |
+**缩略图（thumb）：**
+
+- 前端小图模式（列表网格）请求 `GET /media/{sha256}@small`；卡片内大图与全屏大图请求原图。
+- 基准高度 384px：目标高度固定 384px，宽度按原图比例计算（width = 384 × 原图宽 ÷ 原图高）。
+- 输出格式为 WebP；GIF 取第一帧转静态。
+- 缩略图缓存于 thumb.db（见 3.1 / 3.2），以 `(raw_sha256, width, height)` 唯一索引去重。
+- 生成失败时，在 blob 中写入特殊标记字节；后续命中该标记时不再重试生成，直接返回原图。
+- mode 采用白名单：当前仅 `small`，后续扩展 `medium`/`large` 复用同一机制。
+- 媒体 MIME 由后端判定（按文件内容/扩展名）；无法判定时才使用上传时携带的 Content-Type。
+- 上传时后端解析图片原始尺寸（width/height，像素），存入 media 表并随 MediaDto 返回；字段命名与语义和 thumb.db 保持一致。
+
+| 方法 | 路径                  | 请求体          | 响应体                | 鉴权         | 说明                                                                                                                                                  |
+| ---- | --------------------- | --------------- | --------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET  | /media/{sha256}       | 无              | 文件流（原图）        | Bearer token | 404 媒体不存在；401（未登录）；前端需带 Bearer token 用 fetch 获取 blob 后显示（`<img>` 无法携带请求头）                                              |
+| GET  | /media/{sha256}@small | 无              | 文件流（WebP 缩略图） | Bearer token | 规则见上；404 媒体不存在；401（未登录）                                                                                                               |
+| POST | /api/media            | multipart：file | MediaDto              | Bearer token | 仅支持 jpg/jpeg/png/gif/webp/bmp，大小不超过 20MB；sha256 与 width/height 由后端解析，无法解析为有效图片返回 400；相同内容重复上传复用已有记录；400 类型或大小不符；401（未登录） |
 
 ### 1.4. 评论
 
-| 方法 | 路径 | 请求体 | 响应体 | 鉴权 | 说明 |
-| ---- | ---- | ------ | ------ | ---- | ---- |
-| DELETE | /api/comments/{commentId} | 无 | 无（204） | Bearer token | 仅作者可删，非作者返回 403；逻辑删除（is_deleted=1），删除后评论列表不再返回；404 评论不存在；401（未登录） |
+| 方法   | 路径                      | 请求体 | 响应体    | 鉴权         | 说明                                                                                                        |
+| ------ | ------------------------- | ------ | --------- | ------------ | ----------------------------------------------------------------------------------------------------------- |
+| DELETE | /api/comments/{commentId} | 无     | 无（204） | Bearer token | 仅作者可删，非作者返回 403；逻辑删除（is_deleted=1），删除后评论列表不再返回；404 评论不存在；401（未登录） |
 
 ## 2. DTO 定义
 
 ### 2.1. 请求体
 
-#### CreatePostRequest
+#### 2.1.1. CreatePostRequest
 
 ```json
 {
@@ -57,9 +69,9 @@
 ```
 
 - `textContent`：可选，最多 10000 字
-- `mediaContent`：可选，元素为文件内容的 SHA256；编辑阶段先上传图片（POST /api/media），由后端计算并返回；发帖时元素须已上传，重复元素原样保留
+- `mediaContent`：可选，元素为已上传图片的 SHA256（字符串列表）；编辑阶段先上传图片（POST /api/media），由后端计算并返回；发帖时元素须已上传，重复元素原样保留；后端按 sha256 从 media 表补齐 width/height，存为 `{ "sha256", "width", "height" }`
 
-#### CreateCommentRequest
+#### 2.1.2. CreateCommentRequest
 
 ```json
 {
@@ -71,7 +83,7 @@
 
 ### 2.2. 响应体
 
-#### ErrorBody
+#### 2.2.1. ErrorBody
 
 ```json
 {
@@ -83,7 +95,7 @@
 - `code`：与 HTTP 状态码一致
 - `message`：错误描述
 
-#### LoginResult
+#### 2.2.2. LoginResult
 
 ```json
 {
@@ -92,7 +104,7 @@
 }
 ```
 
-#### PostDto
+#### 2.2.3. PostDto
 
 ```json
 {
@@ -101,13 +113,17 @@
     "nickname": "<nickname>",
     "textContent": "今天天气不错",
     "mediaContent": [
-        "<media sha256>"
+        {
+            "sha256": "<media sha256>",
+            "width": 1920,
+            "height": 1080
+        }
     ],
     "createdAt": 1724227200
 }
 ```
 
-#### PostList
+#### 2.2.4. PostList
 
 ```json
 {
@@ -126,7 +142,7 @@
 
 - `items`：PostDto 数组
 
-#### PostMetadata
+#### 2.2.5. PostMetadata
 
 ```json
 {
@@ -136,7 +152,7 @@
 
 - `totalCount`：有效（未删除）帖子总数
 
-#### CommentDto
+#### 2.2.6. CommentDto
 
 ```json
 {
@@ -149,7 +165,7 @@
 }
 ```
 
-#### CommentList
+#### 2.2.7. CommentList
 
 ```json
 {
@@ -168,12 +184,14 @@
 
 - `items`：CommentDto 数组
 
-#### MediaDto
+#### 2.2.8. MediaDto
 
 ```json
 {
     "sha256": "<sha256>",
     "contentType": "image/png",
+    "width": 1920,
+    "height": 1080,
     "url": "/media/<sha256>"
 }
 ```
@@ -182,12 +200,13 @@
 
 ### 3.1. 基本存储方案
 
-| 名称    | 类型          | 作用                                                            |
-| ------- | ------------- | --------------------------------------------------------------- |
-| data.db | sqlite 数据库 | 存储主要数据，包括用户/帖子/回复/媒体文件元数据                 |
-| static/ | 目录          | 存储静态文件，例如媒体文件，采用二级哈希结构，如 /ef/ac/efac... |
+| 名称     | 类型          | 作用                                                            |
+| -------- | ------------- | --------------------------------------------------------------- |
+| data.db  | sqlite 数据库 | 存储主要数据，包括用户/帖子/回复/媒体文件元数据                 |
+| thumb.db | sqlite 数据库 | 缓存缩略图（WebP blob），见 3.2 表定义                          |
+| static/  | 目录          | 存储静态文件，例如媒体文件，采用二级哈希结构，如 /ef/ac/efac... |
 
-### 3.2. 表定义
+### 3.2. data.db 表定义
 
 **用户 (user):**
 
@@ -200,15 +219,15 @@
 
 **帖子 (post):**
 
-| 字段          | 类型    | 说明                                                             |
-| ------------- | ------- | ---------------------------------------------------------------- |
-| id            | INTEGER | 自增主键                                                         |
-| post_id       | TEXT    | post 的 id，为 uuidv4                                            |
-| user_id       | TEXT    | 发布者的 user_id                                                 |
-| text_content  | TEXT    | 文字内容                                                         |
-| media_content | TEXT    | 媒体文件内容，为 json 列表，每个元素为 media 的 sha256，有顺序性 |
-| created_at    | INTEGER | 发布时间，为 unix 秒级时间戳，使用 UTC 0                         |
-| is_deleted    | INTEGER | 0/1，指示 post 是否被删除                                        |
+| 字段          | 类型    | 说明                                                                       |
+| ------------- | ------- | -------------------------------------------------------------------------- |
+| id            | INTEGER | 自增主键                                                                   |
+| post_id       | TEXT    | post 的 id，为 uuidv4                                                      |
+| user_id       | TEXT    | 发布者的 user_id                                                           |
+| text_content  | TEXT    | 文字内容                                                                   |
+| media_content | TEXT    | 媒体文件内容，为 json 列表，每个元素为 { sha256, width, height }，有顺序性 |
+| created_at    | INTEGER | 发布时间，为 unix 秒级时间戳，使用 UTC 0                                   |
+| is_deleted    | INTEGER | 0/1，指示 post 是否被删除                                                  |
 
 **评论 (comment):**
 
@@ -230,3 +249,27 @@
 | sha256 | TEXT    | 文件的 SHA256，唯一索引      |
 | mime   | TEXT    | 文件的 MIME，如 `image/jpeg` |
 | size   | INTEGER | 文件大小，单位为字节         |
+| width  | INTEGER | 图片宽度（像素）             |
+| height | INTEGER | 图片高度（像素）             |
+
+### 3.3. thumb.db 表定义
+
+**缩略图 (thumb):**
+
+| 字段       | 类型    | 说明                                      |
+| ---------- | ------- | ----------------------------------------- |
+| id         | INTEGER | 自增主键                                  |
+| raw_sha256 | TEXT    | 原图的 sha256                             |
+| width      | INTEGER | 缩略图宽度（按原图比例计算）              |
+| height     | INTEGER | 缩略图高度（基准 384px）                  |
+| blob       | BLOB    | WebP 图像数据；生成失败时写入特殊标记字节 |
+
+唯一索引：`(raw_sha256, width, height)`。
+
+说明：thumb.width / thumb.height 与 media.width / media.height 均为像素尺寸，命名与语义一致。
+
+**特殊标记字节：**
+
+| 特殊标记字节 | 值                                                        | 说明                                                                                                                                                                                                    |
+| ------------ | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| THUMBFAIL    | `54 48 55 4D 42 46 41 49 4C`（ASCII "THUMBFAIL"，9 字节） | 缩略图生成失败时写入 blob 首部；读取时先比较 blob 长度：长度小于 16 字节时才进入 StartsWith 比对；命中则视为生成失败，直接返回原图，不再重试生成（合法 WebP 至少 16+ 字节，长度判断可跳过绝大多数比对） |

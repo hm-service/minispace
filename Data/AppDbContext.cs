@@ -59,6 +59,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         media.Property(m => m.Sha256).HasColumnName("sha256");
         media.Property(m => m.Mime).HasColumnName("mime");
         media.Property(m => m.Size).HasColumnName("size");
+        media.Property(m => m.Width).HasColumnName("width");
+        media.Property(m => m.Height).HasColumnName("height");
         media.HasIndex(m => m.Sha256).IsUnique();
     }
 }

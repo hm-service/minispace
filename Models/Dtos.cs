@@ -13,7 +13,7 @@ public record PostDto(
     string UserId,
     string Nickname,
     string TextContent,
-    List<string> MediaContent,
+    List<MediaItem> MediaContent,
     long CreatedAt);
 
 public record PostList(List<PostDto> Items);
@@ -30,4 +30,6 @@ public record CommentDto(
 
 public record CommentList(List<CommentDto> Items);
 
-public record MediaDto(string Sha256, string ContentType, string Url);
+public record MediaDto(string Sha256, string ContentType, int Width, int Height, string Url);
+
+public record MediaItem(string Sha256, int Width, int Height);

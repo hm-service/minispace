@@ -39,4 +39,15 @@ public class Media
     public required string Sha256 { get; set; }
     public required string Mime { get; set; }
     public long Size { get; set; }
+    public int Width { get; set; }
+    public int Height { get; set; }
+}
+
+public class Thumb
+{
+    public int Id { get; set; }
+    public required string RawSha256 { get; set; }
+    public int Width { get; set; }
+    public int Height { get; set; }
+    public required byte[] Blob { get; set; }
 }

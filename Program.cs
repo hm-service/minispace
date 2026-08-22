@@ -17,6 +17,8 @@ AuditLog.Init(Path.Combine(dataDir, "log.txt"));
 builder.Services
     .AddDbContext<AppDbContext>(
         o => o.UseSqlite($"Data Source={Path.Combine(dataDir, "data.db")}"))
+    .AddDbContext<ThumbDbContext>(
+        o => o.UseSqlite($"Data Source={Path.Combine(dataDir, "thumb.db")}"))
     .AddOpenApi();
 
 var app = builder.Build();
@@ -30,6 +32,14 @@ using (var scope = app.Services.CreateScope())
     db.Database.EnsureCreated();
     if (app.Environment.IsDevelopment())
         await DbSeeder.SeedAsync(db);
+    var tdb = scope.ServiceProvider.GetRequiredService<ThumbDbContext>();
+    tdb.Database.EnsureCreated();
+
+    // 兼容旧库：media 表缺少 width/height 列时补充（重复列错误直接忽略）
+    try { db.Database.ExecuteSqlRaw("ALTER TABLE media ADD COLUMN width INTEGER NOT NULL DEFAULT 0"); }
+    catch { }
+    try { db.Database.ExecuteSqlRaw("ALTER TABLE media ADD COLUMN height INTEGER NOT NULL DEFAULT 0"); }
+    catch { }
 }
 
 app.UseDefaultFiles();

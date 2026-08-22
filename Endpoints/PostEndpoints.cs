@@ -11,6 +11,10 @@ public static class PostEndpoints
 {
     private const int PageSize = 10;
     private static readonly Regex Sha256Regex = new("^[0-9a-fA-F]{64}$");
+    private static readonly JsonSerializerOptions MediaJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
 
     public static IEndpointRouteBuilder MapPostEndpoints(this IEndpointRouteBuilder app)
     {
@@ -51,12 +55,19 @@ public static class PostEndpoints
         if (distinct.Any(s => !uploaded.Contains(s)))
             return ApiErrors.BadRequest("mediaContent 包含未上传的图片");
 
+        var dims = await GetDimsAsync(db, media);
+        var mediaItems = media
+            .Select(s => dims.TryGetValue(s, out var d)
+                ? new MediaItem(s, d.Width, d.Height)
+                : new MediaItem(s, 0, 0))
+            .ToList();
+
         var post = new Post
         {
             PostId = Guid.NewGuid().ToString("D"),
             UserId = user.UserId,
             TextContent = text,
-            MediaContent = JsonSerializer.Serialize(media),
+            MediaContent = JsonSerializer.Serialize(mediaItems, MediaJsonOptions),
             CreatedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
             IsDeleted = false
         };
@@ -102,9 +113,15 @@ public static class PostEndpoints
             .Take(PageSize)
             .ToListAsync();
 
-        var items = rows
-            .Select(r => new PostDto(r.PostId, r.UserId, r.Nickname, r.TextContent,
-                ParseMedia(r.MediaContent), r.CreatedAt))
+        var parsed = rows.Select(r => new
+        {
+            r.PostId, r.UserId, r.Nickname, r.TextContent, r.CreatedAt,
+            Media = ParseMedia(r.MediaContent)
+        }).ToList();
+        var dims = await GetDimsAsync(db, parsed.SelectMany(x => x.Media).Select(m => m.Sha256).ToList());
+        var items = parsed
+            .Select(x => new PostDto(x.PostId, x.UserId, x.Nickname, x.TextContent,
+                FillDims(x.Media, dims), x.CreatedAt))
             .ToList();
         return Results.Ok(new PostList(items));
     }
@@ -201,21 +218,70 @@ public static class PostEndpoints
             where p.PostId == postId && !p.IsDeleted
             select new { p.PostId, p.UserId, u.Nickname, p.TextContent, p.MediaContent, p.CreatedAt })
             .FirstOrDefaultAsync();
-        return row is null
-            ? null
-            : new PostDto(row.PostId, row.UserId, row.Nickname, row.TextContent,
-                ParseMedia(row.MediaContent), row.CreatedAt);
+        if (row is null)
+            return null;
+        var dims = await GetDimsAsync(db, ParseMedia(row.MediaContent).Select(m => m.Sha256).ToList());
+        return new PostDto(row.PostId, row.UserId, row.Nickname, row.TextContent,
+            FillDims(ParseMedia(row.MediaContent), dims), row.CreatedAt);
     }
 
-    private static List<string> ParseMedia(string json)
+    private static List<MediaItem> ParseMedia(string json)
     {
         try
         {
-            return JsonSerializer.Deserialize<List<string>>(json) ?? [];
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                return [];
+            var list = new List<MediaItem>();
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                if (el.ValueKind == JsonValueKind.String)
+                {
+                    list.Add(new MediaItem(el.GetString() ?? "", 0, 0));
+                }
+                else if (el.ValueKind == JsonValueKind.Object &&
+                         TryProp(el, "sha256", out var sha) &&
+                         sha.ValueKind == JsonValueKind.String)
+                {
+                    var w = TryProp(el, "width", out var pw) && pw.TryGetInt32(out var iw) ? iw : 0;
+                    var h = TryProp(el, "height", out var ph) && ph.TryGetInt32(out var ih) ? ih : 0;
+                    list.Add(new MediaItem(sha.GetString() ?? "", w, h));
+                }
+            }
+            return list;
         }
         catch
         {
             return [];
         }
     }
+
+    private static bool TryProp(JsonElement el, string name, out JsonElement value)
+    {
+        if (el.TryGetProperty(name, out value))
+            return true;
+        var pascal = name.Length > 0 ? char.ToUpperInvariant(name[0]) + name[1..] : name;
+        return el.TryGetProperty(pascal, out value);
+    }
+
+    private static async Task<Dictionary<string, (int Width, int Height)>> GetDimsAsync(
+        AppDbContext db, List<string> shas)
+    {
+        var distinct = shas.Distinct().ToList();
+        if (distinct.Count == 0)
+            return new Dictionary<string, (int, int)>();
+        var rows = await db.Media.AsNoTracking()
+            .Where(m => distinct.Contains(m.Sha256))
+            .Select(m => new { m.Sha256, m.Width, m.Height })
+            .ToListAsync();
+        return rows.ToDictionary(r => r.Sha256, r => (r.Width, r.Height));
+    }
+
+    private static List<MediaItem> FillDims(
+        List<MediaItem> items, Dictionary<string, (int Width, int Height)> dims) =>
+        items.Select(i => i.Width > 0 && i.Height > 0
+            ? i
+            : (dims.TryGetValue(i.Sha256, out var d) && d.Width > 0 && d.Height > 0
+                ? new MediaItem(i.Sha256, d.Width, d.Height)
+                : i)).ToList();
 }

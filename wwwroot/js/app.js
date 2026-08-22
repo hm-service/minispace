@@ -25,19 +25,33 @@ function fullTime(sec) {
          ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
 }
 
+function avatarStyle(id) {
+  let h = 0;
+  const s = String(id || '');
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  const h1 = h % 360;
+  const h2 = (h1 + 40 + (h >>> 3) % 70) % 360;
+  return { background: `linear-gradient(135deg, hsl(${h1} 72% 62%), hsl(${h2} 66% 46%))` };
+}
+
 createApp({
   setup() {
     const token = ref(Api.token);
     const tokenFocus = ref(false);
+    const DRAFT_POST = 'ms_draft_post';
+    const draftCommentKey = (postId) => 'ms_draft_comment_' + postId;
+    const draftTimers = {};
+    const commentTimers = {};
     const me = ref(null);
     const posts = ref([]);
-    const page = ref(1);
+    const page = ref(parseInt(new URLSearchParams(location.search).get('page') || '', 10) || 1);
     const totalPages = ref(1);
     const loading = ref(false);
     const error = ref('');
     const lightbox = reactive({ show: false, postId: null, index: 0 });
     const expanded = reactive({});
     const draft = reactive({ text: '', files: [], previews: [], statuses: [], uploading: false });
+    draft.text = localStorage.getItem(DRAFT_POST) || '';
     const comments = reactive({});
     const timeMode = reactive({});
     const commentText = reactive({});
@@ -49,13 +63,14 @@ createApp({
 
     const gridClass = (list) => list.length === 1 ? 'grid single' : 'grid';
 
-    function imgUrl(sha) {
-      if (imgCache[sha]) return imgCache[sha];
-      if (!loadingImgs.has(sha)) {
-        loadingImgs.add(sha);
-        Api.mediaBlob(sha)
-          .then((blob) => { imgCache[sha] = URL.createObjectURL(blob); })
-          .catch(() => { imgCache[sha] = ''; });
+    function imgUrl(sha, mode) {
+      const key = sha + (mode ? '@' + mode : '');
+      if (imgCache[key]) return imgCache[key];
+      if (!loadingImgs.has(key)) {
+        loadingImgs.add(key);
+        Api.mediaBlob(sha, mode)
+          .then((blob) => { imgCache[key] = URL.createObjectURL(blob); })
+          .catch(() => { imgCache[key] = ''; });
       }
       return '';
     }
@@ -64,10 +79,10 @@ createApp({
       const p = posts.value.find((x) => x.postId === postId);
       if (!p) return;
       lightbox.postId = postId;
-      lightbox.index = Math.max(0, p.mediaContent.indexOf(sha));
+      lightbox.index = Math.max(0, p.mediaContent.findIndex((m) => m.sha256 === sha));
       resetZoom();
       lightbox.show = true;
-      p.mediaContent.forEach(imgUrl);
+      p.mediaContent.forEach((m) => imgUrl(m.sha256));
       nextTick(measureLb);
     }
 
@@ -78,7 +93,7 @@ createApp({
 
     function currentSha() {
       const list = lbList();
-      return list[lightbox.index] || '';
+      return list[lightbox.index]?.sha256 || '';
     }
 
     function lbStep(d) {
@@ -355,7 +370,7 @@ createApp({
 
     function expSha(postId) {
       const list = expList(postId);
-      return list[expanded[postId] ?? 0] || '';
+      return list[expanded[postId] ?? 0]?.sha256 || '';
     }
 
     function expStep(postId, d) {
@@ -418,13 +433,13 @@ createApp({
 
     function expNextSha(postId) {
       const list = expList(postId);
-      return list[(expanded[postId] ?? 0) + 1] || '';
+      return list[(expanded[postId] ?? 0) + 1]?.sha256 || '';
     }
 
     function expPrevSha(postId) {
       const list = expList(postId);
       const i = (expanded[postId] ?? 0) - 1;
-      return i >= 0 ? list[i] : '';
+      return i >= 0 ? (list[i]?.sha256 || '') : '';
     }
 
     function expStageStyle(postId) {
@@ -436,27 +451,23 @@ createApp({
       expanded[postId] = i;
       const p = posts.value.find((x) => x.postId === postId);
       if (!p || !p.mediaContent.length) return;
-      let maxRatio = 0;
-      let remain = p.mediaContent.length;
-      const finish = () => {
-        if (--remain > 0) return;
-        if (!maxRatio) return;
-        const el = document.querySelector(`.post-expand[data-post="${postId}"] .exp-stage`);
-        const width = el ? el.clientWidth : 300;
-        const height = Math.min(window.innerHeight * 0.72, width * maxRatio);
-        expHeight[postId] = Math.round(height);
-      };
-      p.mediaContent.forEach((sha) => {
-        const img = new Image();
-        img.onload = () => {
-          if (img.naturalWidth && img.naturalHeight) {
-            maxRatio = Math.max(maxRatio, img.naturalHeight / img.naturalWidth);
-          }
-          finish();
-        };
-        img.onerror = finish;
-        img.src = imgUrl(sha);
-      });
+      measureExpHeight(postId, p.mediaContent);
+    }
+
+    function applyExpHeight(postId, maxRatio) {
+      if (!maxRatio) return;
+      const el = document.querySelector(`.post-expand[data-post="${postId}"] .exp-stage`);
+      const width = el ? el.clientWidth : 300;
+      expHeight[postId] = Math.round(Math.min(window.innerHeight * 0.72, width * maxRatio));
+    }
+
+    function measureExpHeight(postId, mediaList) {
+      const known = mediaList.filter((m) => m.width > 0 && m.height > 0);
+      if (known.length === mediaList.length) {
+        applyExpHeight(postId, Math.max(...mediaList.map((m) => m.height / m.width)));
+        return;
+      }
+      // 旧数据缺尺寸：不计算，等原图请求懒修复后自然补上
     }
 
     function expCurrentStyle(postId) {
@@ -585,6 +596,7 @@ createApp({
         const meta = await Api.postMetadata();
         totalPages.value = Math.max(1, Math.ceil(meta.totalCount / 10));
         if (page.value > totalPages.value) page.value = totalPages.value;
+        syncPageUrl();
         posts.value = (await Api.listPosts(page.value)).items;
         await Promise.all(posts.value.map(async (p) => {
           try {
@@ -593,6 +605,12 @@ createApp({
             comments[p.postId] = [];
           }
         }));
+        posts.value.forEach((p) => {
+          if (commentText[p.postId] === undefined) {
+            const v = localStorage.getItem(draftCommentKey(p.postId));
+            if (v != null) commentText[p.postId] = v;
+          }
+        });
       } catch (e) {
         error.value = e.message;
       } finally {
@@ -603,7 +621,15 @@ createApp({
     function goPage(p) {
       if (p < 1 || p > totalPages.value || p === page.value) return;
       page.value = p;
+      syncPageUrl();
       loadFeed();
+    }
+
+    function syncPageUrl() {
+      const url = new URL(location.href);
+      if (page.value > 1) url.searchParams.set('page', page.value);
+      else url.searchParams.delete('page');
+      history.replaceState(null, '', url.toString());
     }
 
     async function login() {
@@ -629,6 +655,7 @@ createApp({
       me.value = null;
       posts.value = [];
       page.value = 1;
+      syncPageUrl();
     }
 
     function onPick(e) {
@@ -670,6 +697,10 @@ createApp({
         }
         await Api.createPost(text, mediaContent);
         draft.text = '';
+        clearTimeout(draftTimers[DRAFT_POST]);
+        localStorage.removeItem(DRAFT_POST);
+        const composerEl = document.querySelector('textarea[data-composer]');
+        if (composerEl) composerEl.style.height = 'auto';
         draft.previews.forEach((u) => URL.revokeObjectURL(u));
         draft.files = [];
         draft.previews = [];
@@ -690,10 +721,51 @@ createApp({
         const c = await Api.addComment(postId, content);
         (comments[postId] ||= []).unshift(c);
         commentText[postId] = '';
+        clearTimeout(commentTimers[draftCommentKey(postId)]);
+        localStorage.removeItem(draftCommentKey(postId));
+        const el = document.querySelector(`.comment-box textarea[data-post="${postId}"]`);
+        if (el) el.style.height = 'auto';
       } catch (e) {
         error.value = e.message;
       } finally {
         sendingComment[postId] = false;
+      }
+    }
+
+    function growComment(e) {
+      const el = e.target;
+      el.style.height = 'auto';
+      el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+    }
+
+    function growDraft(e) {
+      const el = e.target;
+      el.style.height = 'auto';
+      el.style.height = el.scrollHeight + 'px';
+    }
+
+    function saveSoon(key, value, timers) {
+      clearTimeout(timers[key]);
+      timers[key] = setTimeout(() => {
+        try { localStorage.setItem(key, value); } catch {}
+      }, 1000);
+    }
+
+    function onDraftInput(e) {
+      growDraft(e);
+      saveSoon(DRAFT_POST, draft.text, draftTimers);
+    }
+
+    function onCommentInput(postId, e) {
+      growComment(e);
+      saveSoon(draftCommentKey(postId), commentText[postId], commentTimers);
+    }
+
+    function onCommentKeydown(postId, e) {
+      if (e.isComposing) return;
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendComment(postId);
       }
     }
 
@@ -729,8 +801,10 @@ createApp({
       expanded, collapse,
       draft, comments, commentText, sendingComment, fileInput,
       login, logout, loadFeed, goPage, onPick, removeDraft, submitPost,
-      sendComment, removeComment, removePost, imgUrl, fmtTime, fullTime,
+      sendComment, growComment, onCommentKeydown, removeComment, removePost, imgUrl, fmtTime, fullTime,
+      onDraftInput, onCommentInput,
       toggleTime, displayTime, ringStyle, gridClass,
+      avatarStyle,
       confirmState, confirmNo, confirmYes,
       openLightbox, closeLightbox, lbStep, lbCan, currentSha, lbList,
       onLbTouchStart, onLbTouchMove, onLbTouchEnd, onLbTouchCancel,
@@ -745,7 +819,7 @@ createApp({
   },
   template: `
     <div v-if="!me" class="login">
-        <h1>MiniSpace <span class="ver">v21</span></h1>
+        <h1>MiniSpace <span class="ver">v2</span></h1>
         <p class="sub">填入你的访问 token 进入</p>
         <div class="login-box">
           <input v-model="token" :placeholder="tokenFocus ? '' : 'token'" autocomplete="off"
@@ -759,12 +833,13 @@ createApp({
     <div v-else class="wrap">
       <div class="feed">
         <header class="topbar">
-          <div class="brand">MiniSpace <span class="ver">v21</span></div>
+          <div class="brand">MiniSpace <span class="ver">v2</span></div>
           <div class="who">{{ me.nickname }} <button class="link" @click="logout">退出</button></div>
         </header>
 
         <div class="composer card">
-          <textarea v-model="draft.text" rows="3" maxlength="10000" placeholder="分享新鲜事…"></textarea>
+          <textarea v-model="draft.text" rows="3" maxlength="10000" placeholder="分享新鲜事…"
+                    data-composer @input="onDraftInput"></textarea>
           <div class="picker-grid">
             <div v-for="(p, i) in draft.previews" :key="i" class="cell">
               <img :src="p">
@@ -791,7 +866,7 @@ createApp({
 
         <article v-for="p in posts" :key="p.postId" class="post card">
           <header>
-            <span class="avatar">{{ p.nickname[0] }}</span>
+            <span class="avatar" :style="avatarStyle(p.userId)">{{ p.nickname[0] }}</span>
             <div class="meta">
               <div class="nick">{{ p.nickname }}</div>
               <div class="time" @click="toggleTime('p:' + p.postId)">
@@ -823,7 +898,7 @@ createApp({
             </div>
           </div>
           <div v-else-if="p.mediaContent.length" :class="gridClass(p.mediaContent)">
-            <img v-for="(sha, i) in p.mediaContent" :key="i" :src="imgUrl(sha)" loading="lazy"
+            <img v-for="(m, i) in p.mediaContent" :key="i" :src="imgUrl(m.sha256, 'small')" loading="lazy"
                  @click="openExpanded(p.postId, i)">
           </div>
           <div class="comments">
@@ -837,8 +912,10 @@ createApp({
               </div>
             </div>
             <div class="comment-box">
-              <input v-model="commentText[p.postId]" maxlength="500" placeholder="写评论…"
-                     @keyup.enter="sendComment(p.postId)">
+              <textarea v-model="commentText[p.postId]" rows="1" maxlength="500" placeholder="写评论…"
+                        :data-post="p.postId"
+                        @input="onCommentInput(p.postId, $event)"
+                        @keydown="onCommentKeydown(p.postId, $event)"></textarea>
               <button class="primary small" :disabled="sendingComment[p.postId]"
                       @click="sendComment(p.postId)">发送</button>
             </div>

@@ -53,8 +53,9 @@ const Api = {
     Api.request('POST', '/api/posts/' + postId + '/comments', { content }),
   deleteComment: (commentId) => Api.request('DELETE', '/api/comments/' + commentId),
 
-  async mediaBlob(sha256) {
-    const res = await fetch('/media/' + sha256, {
+  async mediaBlob(sha256, mode) {
+    const url = '/media/' + sha256 + (mode ? '@' + mode : '');
+    const res = await fetch(url, {
       headers: { Authorization: 'Bearer ' + Api.token },
     });
     if (!res.ok) throw new Error('图片加载失败');
