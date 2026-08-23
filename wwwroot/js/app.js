@@ -107,9 +107,13 @@ const PostCard = {
     }
     function applyExpHeight(maxRatio) {
       if (!maxRatio) return;
-      const el = document.querySelector(`.post-expand[data-post="${postId}"] .exp-stage`);
+      const el = document.querySelector(`.post-expand .exp-stage[data-post="${postId}"]`);
       const width = el ? el.clientWidth : 300;
-      expHeight[postId] = Math.round(Math.min(window.innerHeight * 0.72, width * maxRatio));
+      // 单图帖：撑满宽度、完整比例高度，不设 72vh 上限；多图帖维持上限
+      const height = media.length === 1
+        ? width * maxRatio
+        : Math.min(window.innerHeight * 0.72, width * maxRatio);
+      expHeight[postId] = Math.round(height);
     }
     function measureExpHeight() {
       const known = media.filter((m) => m.width > 0 && m.height > 0);
@@ -262,8 +266,17 @@ const PostCard = {
       if (n.naturalWidth && n.naturalHeight) applySingleSize(n.naturalWidth, n.naturalHeight);
       singleImg.loaded = true;
     }
-    function onExpImgLoad() {
+    function onExpImgLoad(e) {
       stageLoaded.value = true;
+      // 单图帖：以加载后图片的真实比例重算舞台高度，覆盖 EXIF/媒体尺寸不一致
+      if (media.length === 1) {
+        const n = e.target;
+        if (n.naturalWidth && n.naturalHeight) {
+          const el = e.target.parentElement; // .exp-stage
+          const width = el ? el.clientWidth : 300;
+          expHeight[postId] = Math.round(width * n.naturalHeight / n.naturalWidth);
+        }
+      }
     }
 
     function openMenu() {
@@ -365,7 +378,7 @@ const PostCard = {
            @touchend="onExpTouchEnd"
            @touchcancel="onExpTouchCancel"
            @mousedown.prevent="onExpMouseDown($event)">
-        <div class="exp-stage" :class="{ 'stage-loaded': stageLoaded }"
+        <div class="exp-stage" :class="{ 'stage-loaded': stageLoaded, 'exp-single': media.length === 1 }"
              :data-post="post.postId" :style="expStageStyle()">
           <img v-if="expPrevSha()" class="exp-img" :src="imgUrl(expPrevSha(), 'medium')"
                :style="expPrevStyle()" draggable="false">
@@ -1073,7 +1086,7 @@ createApp({
     <div v-if="me && !isSingle" class="wrap">
       <div class="feed">
         <header class="topbar">
-          <div class="brand">MiniSpace <span class="ver">v60</span></div>
+          <div class="brand">MiniSpace <span class="ver">v61</span></div>
           <div class="who">{{ me.nickname }} <button class="link" @click="logout">退出</button></div>
         </header>
 
@@ -1129,7 +1142,7 @@ createApp({
     </div>
 
     <div v-else-if="isAuthPage" class="login">
-        <h1>MiniSpace <span class="ver">v60</span></h1>
+        <h1>MiniSpace <span class="ver">v61</span></h1>
         <p class="sub">填入你的访问 token 进入</p>
         <div class="login-box">
           <input v-model="token" :placeholder="tokenFocus ? '' : 'token'" autocomplete="off"

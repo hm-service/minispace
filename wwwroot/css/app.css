@@ -260,6 +260,7 @@ input:focus, textarea:focus {
     var(--surface-muted);
   animation: img-shimmer 1.6s ease-in-out infinite;
 }
+.exp-stage.exp-single { max-height: none; }
 .exp-stage.stage-loaded { animation: none; }
 .post-expand .exp-img {
   position: absolute; inset: 0; width: 100%; height: 100%;
