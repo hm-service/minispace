@@ -47,6 +47,7 @@ const Api = {
     Api.request('POST', '/api/posts', { textContent, mediaContent }),
   postMetadata: () => Api.request('GET', '/api/posts/metadata'),
   listPosts: (page) => Api.request('GET', '/api/posts?page=' + page),
+  post: (postId) => Api.request('GET', '/api/posts/' + postId),
   deletePost: (postId) => Api.request('DELETE', '/api/posts/' + postId),
   comments: (postId) => Api.request('GET', '/api/posts/' + postId + '/comments'),
   addComment: (postId, content) =>

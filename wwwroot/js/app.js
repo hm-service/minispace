@@ -51,6 +51,8 @@ const PostCard = {
     const expHeight = reactive({});
     const singleImg = reactive({ w: 0, h: 0, ready: false, loaded: false });
     const stageLoaded = ref(false);
+    const menuOpen = ref(false);
+    const info = reactive({ show: false, title: '', message: '' });
     let expStart = 0;
     let expStartY = 0;
     let suppressClick = false;
@@ -190,11 +192,7 @@ const PostCard = {
 
     function onExpTouchStart(e) {
       if (e.touches.length >= 2) {
-        // 双指捏合 → 直接进入全屏大图
-        swallowNextClick();
-        expResetDrag();
-        app.openLightbox(postId, expanded[postId] ?? 0);
-        return;
+        return; // 双指手势不再进入全屏
       }
       if (expCarousel.dragging) return;
       const t = e.changedTouches[0];
@@ -269,6 +267,56 @@ const PostCard = {
       stageLoaded.value = true;
     }
 
+    function showInfo(title, message) {
+      info.title = title;
+      info.message = message;
+      info.show = true;
+    }
+    function closeInfo() {
+      info.show = false;
+    }
+    function openMenu() {
+      menuOpen.value = true;
+    }
+    function closeMenu() {
+      menuOpen.value = false;
+    }
+    function favorite() {
+      menuOpen.value = false;
+      showInfo('收藏', '收藏功能开发中，敬请期待');
+    }
+    function copyTextFallback(text) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try {
+        ok = document.execCommand('copy');
+      } catch {}
+      document.body.removeChild(ta);
+      return ok;
+    }
+    async function copyLink() {
+      menuOpen.value = false;
+      const url = location.origin + '/posts/' + postId;
+      try {
+        const ok = (navigator.clipboard && window.isSecureContext)
+          ? (await navigator.clipboard.writeText(url), true)
+          : copyTextFallback(url);
+        app.showToast(ok ? '链接已复制' : '复制失败，请手动复制');
+      } catch {
+        app.showToast('复制失败，请手动复制');
+      }
+    }
+    function menuDelete() {
+      menuOpen.value = false;
+      app.removePost(post.postId);
+    }
+
     onMounted(() => {
       nextTick(measureSingle);
       window.addEventListener('resize', measureSingle);
@@ -285,6 +333,8 @@ const PostCard = {
       avatarStyle, fmtTime, fullTime, gridClass,
       singleAspect, singleImg, onSingleLoad,
       stageLoaded, onExpImgLoad,
+      menuOpen, openMenu, closeMenu, favorite, copyLink, menuDelete,
+      info, closeInfo,
       imgUrl, media, expanded,
       expSha, expNextSha, expPrevSha, expStep, collapse,
       expStageStyle, expCurrentStyle, expNextStyle, expPrevStyle,
@@ -302,7 +352,15 @@ const PostCard = {
             {{ displayTime('p:' + post.postId, post.createdAt) }}
           </div>
         </div>
-        <button v-if="post.userId === me.userId" class="link del" @click="removePost(post.postId)">删除</button>
+        <div class="post-menu">
+          <button class="kebab" @click.stop="openMenu">⋮</button>
+          <div v-if="menuOpen" class="menu-mask" @click.stop="closeMenu"></div>
+          <div v-if="menuOpen" class="menu-pop">
+            <button class="menu-item" @click="favorite">收藏</button>
+            <button class="menu-item" @click="copyLink">复制链接</button>
+            <button v-if="post.userId === me.userId" class="menu-item del" @click="menuDelete">删除</button>
+          </div>
+        </div>
       </header>
       <p class="text">{{ post.textContent }}</p>
       <div v-if="typeof expanded[post.postId] === 'number'" class="post-expand"
@@ -356,6 +414,15 @@ const PostCard = {
                   @click="sendComment(post.postId)">发送</button>
         </div>
       </div>
+      <div v-if="info.show" class="modal-mask" @click.self="closeInfo">
+        <div class="modal">
+          <h3>{{ info.title }}</h3>
+          <p>{{ info.message }}</p>
+          <div class="modal-actions">
+            <button class="primary" @click="closeInfo">确定</button>
+          </div>
+        </div>
+      </div>
     </article>
   `,
 };
@@ -365,6 +432,21 @@ createApp({
   setup() {
     const token = ref(Api.token);
     const tokenFocus = ref(false);
+    const pathname = location.pathname;
+    const isAuthPage = pathname === '/auth';
+    const isSingle = /^\/posts\/[^/]+$/.test(pathname);
+    const singlePostId = isSingle ? decodeURIComponent(pathname.split('/')[2]) : null;
+
+    // 未认证：非 /auth 一律跳登录页（带 next 回跳）
+    if (!Api.token && !isAuthPage) {
+      location.replace('/auth?next=' + encodeURIComponent(pathname + location.search));
+    }
+    // 已认证且访问 /auth：跳到 next 或根
+    if (Api.token && isAuthPage) {
+      const next = new URLSearchParams(location.search).get('next');
+      location.replace(next || '/');
+    }
+
     const DRAFT_POST = 'ms_draft_post';
     const draftCommentKey = (postId) => 'ms_draft_comment_' + postId;
     const draftTimers = {};
@@ -384,6 +466,14 @@ createApp({
     const sendingComment = reactive({});
     const fileInput = ref(null);
     const confirmState = reactive({ show: false, title: '', message: '', action: null });
+    const toast = reactive({ show: false, message: '' });
+    let toastTimer = null;
+    function showToast(message) {
+      toast.message = message;
+      toast.show = true;
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { toast.show = false; }, 2200);
+    }
 
     // ---- 全屏大图（根级，独立缓存，关闭时释放） ----
     const lbCache = reactive(new Map());
@@ -732,11 +822,15 @@ createApp({
       loading.value = true;
       error.value = '';
       try {
-        const meta = await Api.postMetadata();
-        totalPages.value = Math.max(1, Math.ceil(meta.totalCount / 10));
-        if (page.value > totalPages.value) page.value = totalPages.value;
-        syncPageUrl();
-        posts.value = (await Api.listPosts(page.value)).items;
+        if (isSingle) {
+          posts.value = [await Api.post(singlePostId)];
+        } else {
+          const meta = await Api.postMetadata();
+          totalPages.value = Math.max(1, Math.ceil(meta.totalCount / 10));
+          if (page.value > totalPages.value) page.value = totalPages.value;
+          syncPageUrl();
+          posts.value = (await Api.listPosts(page.value)).items;
+        }
         await Promise.all(posts.value.map(async (p) => {
           try {
             comments[p.postId] = (await Api.comments(p.postId)).items;
@@ -773,17 +867,29 @@ createApp({
     async function login() {
       const t = token.value.trim();
       if (!t) return;
+      if (!/^[\x00-\x7F]+$/.test(t)) {
+        error.value = 'token 只能包含 ASCII 字符';
+        return;
+      }
       try {
         Api.token = t;
         localStorage.setItem('ms_token', t);
         me.value = await Api.login();
         error.value = '';
+        if (isAuthPage) {
+          const next = new URLSearchParams(location.search).get('next');
+          location.replace(next || '/');
+          return;
+        }
         await loadFeed();
       } catch (e) {
         Api.token = '';
         localStorage.removeItem('ms_token');
         me.value = null;
         error.value = e.message;
+        if (!isAuthPage) {
+          location.replace('/auth?next=' + encodeURIComponent(pathname + location.search));
+        }
       }
     }
     function logout() {
@@ -793,6 +899,7 @@ createApp({
       posts.value = [];
       page.value = 1;
       syncPageUrl();
+      location.replace('/auth');
     }
 
     function onPick(e) {
@@ -927,13 +1034,15 @@ createApp({
       me, comments, commentText, sendingComment,
       removePost, openLightbox,
       sendComment, onCommentInput, onCommentKeydown, removeComment,
-      toggleTime, displayTime,
+      toggleTime, displayTime, showToast,
     });
 
     if (Api.token) login();
 
     return {
       token, tokenFocus, me, posts, page, totalPages, loading, error, lightbox,
+      isAuthPage, isSingle,
+      toast,
       draft, fileInput,
       login, logout, loadFeed, goPage, onPick, removeDraft, submitPost,
       onDraftInput, ringStyle,
@@ -944,22 +1053,10 @@ createApp({
     };
   },
   template: `
-    <div v-if="!me" class="login">
-        <h1>MiniSpace <span class="ver">v48</span></h1>
-        <p class="sub">填入你的访问 token 进入</p>
-        <div class="login-box">
-          <input v-model="token" :placeholder="tokenFocus ? '' : 'token'" autocomplete="off"
-                 @focus="tokenFocus = true" @blur="tokenFocus = false"
-                 @keyup.enter="login">
-          <button class="primary" @click="login">进入</button>
-        </div>
-        <p v-if="error" class="error">{{ error }}</p>
-      </div>
-
-    <div v-else class="wrap">
+    <div v-if="me && !isSingle" class="wrap">
       <div class="feed">
         <header class="topbar">
-          <div class="brand">MiniSpace <span class="ver">v48</span></div>
+          <div class="brand">MiniSpace <span class="ver">v53</span></div>
           <div class="who">{{ me.nickname }} <button class="link" @click="logout">退出</button></div>
         </header>
 
@@ -1000,6 +1097,37 @@ createApp({
         <p v-if="!posts.length && !loading" class="empty">还没有动态，发一条吧</p>
       </div>
     </div>
+
+    <div v-else-if="me && isSingle" class="single-page">
+      <header class="topbar single">
+        <a class="link back" href="/">← 返回</a>
+        <div class="who">{{ me.nickname }} <button class="link" @click="logout">退出</button></div>
+      </header>
+      <div class="wrap">
+        <div class="feed">
+          <p v-if="error" class="error">{{ error }}</p>
+          <post-card v-for="p in posts" :key="p.postId" :post="p"></post-card>
+        </div>
+      </div>
+    </div>
+
+    <div v-else-if="isAuthPage" class="login">
+        <h1>MiniSpace <span class="ver">v53</span></h1>
+        <p class="sub">填入你的访问 token 进入</p>
+        <div class="login-box">
+          <input v-model="token" :placeholder="tokenFocus ? '' : 'token'" autocomplete="off"
+                 @focus="tokenFocus = true" @blur="tokenFocus = false"
+                 @keyup.enter="login">
+          <button class="primary" @click="login">进入</button>
+        </div>
+        <p v-if="error" class="error">{{ error }}</p>
+      </div>
+
+    <div v-else class="route-wait"></div>
+
+    <transition name="toast">
+      <div v-if="toast.show" class="toast">{{ toast.message }}</div>
+    </transition>
 
       <div v-if="lightbox.show" class="lightbox"
            @click="closeLightbox"

@@ -34,12 +34,14 @@ using (var scope = app.Services.CreateScope())
         await DbSeeder.SeedAsync(db);
     var tdb = scope.ServiceProvider.GetRequiredService<ThumbDbContext>();
     tdb.Database.EnsureCreated();
+    await UserSync.SyncAsync(db, Path.Combine(dataDir, "users.json"));
 }
 
 app.UseDefaultFiles();
 app.Use(async (context, next) =>
 {
-    if (context.Request.Path == "/" || context.Request.Path == "/index.html")
+    // SPA 路由（/auth、/posts/... 等无扩展名路径）一律 no-cache，确保拿到最新的 index.html
+    if (!(context.Request.Path.Value ?? "").Contains('.'))
         context.Response.Headers.CacheControl = "no-cache";
     await next();
 });
@@ -54,5 +56,6 @@ app.MapAuthEndpoints();
 app.MapPostEndpoints();
 app.MapCommentEndpoints();
 app.MapMediaEndpoints(mediaDir);
+app.MapFallbackToFile("index.html");
 
 app.Run();
