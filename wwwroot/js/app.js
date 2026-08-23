@@ -285,6 +285,10 @@ const PostCard = {
       menuOpen.value = false;
       showInfo('收藏', '收藏功能开发中，敬请期待');
     }
+    function openPost() {
+      menuOpen.value = false;
+      location.href = location.origin + '/posts/' + postId;
+    }
     function copyTextFallback(text) {
       const ta = document.createElement('textarea');
       ta.value = text;
@@ -334,6 +338,7 @@ const PostCard = {
       singleAspect, singleImg, onSingleLoad,
       stageLoaded, onExpImgLoad,
       menuOpen, openMenu, closeMenu, favorite, copyLink, menuDelete,
+      openPost,
       info, closeInfo,
       imgUrl, media, expanded,
       expSha, expNextSha, expPrevSha, expStep, collapse,
@@ -356,6 +361,7 @@ const PostCard = {
           <button class="kebab" @click.stop="openMenu">⋮</button>
           <div v-if="menuOpen" class="menu-mask" @click.stop="closeMenu"></div>
           <div v-if="menuOpen" class="menu-pop">
+            <button class="menu-item" @click="openPost">打开</button>
             <button class="menu-item" @click="favorite">收藏</button>
             <button class="menu-item" @click="copyLink">复制链接</button>
             <button v-if="post.userId === me.userId" class="menu-item del" @click="menuDelete">删除</button>
@@ -863,6 +869,11 @@ createApp({
       else url.searchParams.delete('page');
       history.replaceState(null, '', url.toString());
     }
+    function goBack() {
+      // 同源来源（如从 feed 打开）→ 浏览器后退，保留原页码；直接访问 → 回首页
+      if (document.referrer && document.referrer.startsWith(location.origin)) history.back();
+      else location.href = '/';
+    }
 
     async function login() {
       const t = token.value.trim();
@@ -1042,6 +1053,7 @@ createApp({
     return {
       token, tokenFocus, me, posts, page, totalPages, loading, error, lightbox,
       isAuthPage, isSingle,
+      goBack,
       toast,
       draft, fileInput,
       login, logout, loadFeed, goPage, onPick, removeDraft, submitPost,
@@ -1056,7 +1068,7 @@ createApp({
     <div v-if="me && !isSingle" class="wrap">
       <div class="feed">
         <header class="topbar">
-          <div class="brand">MiniSpace <span class="ver">v53</span></div>
+          <div class="brand">MiniSpace <span class="ver">v57</span></div>
           <div class="who">{{ me.nickname }} <button class="link" @click="logout">退出</button></div>
         </header>
 
@@ -1100,7 +1112,7 @@ createApp({
 
     <div v-else-if="me && isSingle" class="single-page">
       <header class="topbar single">
-        <a class="link back" href="/">← 返回</a>
+        <a class="link back" href="/" @click.prevent="goBack">← 返回</a>
         <div class="who">{{ me.nickname }} <button class="link" @click="logout">退出</button></div>
       </header>
       <div class="wrap">
@@ -1112,7 +1124,7 @@ createApp({
     </div>
 
     <div v-else-if="isAuthPage" class="login">
-        <h1>MiniSpace <span class="ver">v53</span></h1>
+        <h1>MiniSpace <span class="ver">v57</span></h1>
         <p class="sub">填入你的访问 token 进入</p>
         <div class="login-box">
           <input v-model="token" :placeholder="tokenFocus ? '' : 'token'" autocomplete="off"
