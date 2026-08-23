@@ -52,7 +52,6 @@ const PostCard = {
     const singleImg = reactive({ w: 0, h: 0, ready: false, loaded: false });
     const stageLoaded = ref(false);
     const menuOpen = ref(false);
-    const info = reactive({ show: false, title: '', message: '' });
     let expStart = 0;
     let expStartY = 0;
     let suppressClick = false;
@@ -267,14 +266,6 @@ const PostCard = {
       stageLoaded.value = true;
     }
 
-    function showInfo(title, message) {
-      info.title = title;
-      info.message = message;
-      info.show = true;
-    }
-    function closeInfo() {
-      info.show = false;
-    }
     function openMenu() {
       menuOpen.value = true;
     }
@@ -283,7 +274,7 @@ const PostCard = {
     }
     function favorite() {
       menuOpen.value = false;
-      showInfo('收藏', '收藏功能开发中，敬请期待');
+      app.showInfo('收藏', '收藏功能开发中，敬请期待');
     }
     function openPost() {
       menuOpen.value = false;
@@ -318,7 +309,7 @@ const PostCard = {
     }
     function menuDelete() {
       menuOpen.value = false;
-      app.removePost(post.postId);
+      app.removePost(postId);
     }
 
     onMounted(() => {
@@ -339,7 +330,6 @@ const PostCard = {
       stageLoaded, onExpImgLoad,
       menuOpen, openMenu, closeMenu, favorite, copyLink, menuDelete,
       openPost,
-      info, closeInfo,
       imgUrl, media, expanded,
       expSha, expNextSha, expPrevSha, expStep, collapse,
       expStageStyle, expCurrentStyle, expNextStyle, expPrevStyle,
@@ -420,15 +410,6 @@ const PostCard = {
                   @click="sendComment(post.postId)">发送</button>
         </div>
       </div>
-      <div v-if="info.show" class="modal-mask" @click.self="closeInfo">
-        <div class="modal">
-          <h3>{{ info.title }}</h3>
-          <p>{{ info.message }}</p>
-          <div class="modal-actions">
-            <button class="primary" @click="closeInfo">确定</button>
-          </div>
-        </div>
-      </div>
     </article>
   `,
 };
@@ -463,7 +444,7 @@ createApp({
     const totalPages = ref(1);
     const loading = ref(false);
     const error = ref('');
-    const lightbox = reactive({ show: false, postId: null, index: 0 });
+    const lightbox = reactive({ show: false, postId: null, items: [], index: 0 });
     const draft = reactive({ text: '', files: [], previews: [], statuses: [], uploading: false });
     draft.text = localStorage.getItem(DRAFT_POST) || '';
     const comments = reactive({});
@@ -472,6 +453,7 @@ createApp({
     const sendingComment = reactive({});
     const fileInput = ref(null);
     const confirmState = reactive({ show: false, title: '', message: '', action: null });
+    const info = reactive({ show: false, title: '', message: '' });
     const toast = reactive({ show: false, message: '' });
     let toastTimer = null;
     function showToast(message) {
@@ -479,6 +461,14 @@ createApp({
       toast.show = true;
       clearTimeout(toastTimer);
       toastTimer = setTimeout(() => { toast.show = false; }, 2200);
+    }
+    function showInfo(title, message) {
+      info.title = title;
+      info.message = message;
+      info.show = true;
+    }
+    function closeInfo() {
+      info.show = false;
     }
 
     // ---- 全屏大图（根级，独立缓存，关闭时释放） ----
@@ -506,35 +496,46 @@ createApp({
       clearTimeout(tapCloseTimer);
       lastTap = 0;
       lightbox.postId = postId;
-      lightbox.index = Math.max(0, Math.min(index, p.mediaContent.length - 1));
+      lightbox.items = p.mediaContent.map((m) => ({ type: 'sha', sha: m.sha256 }));
+      lightbox.index = Math.max(0, Math.min(index, lightbox.items.length - 1));
       resetZoom();
       lightbox.show = true;
       nextTick(() => {
-        lbImgUrl(currentSha());
+        currentSrc();
         measureLb();
       });
     }
 
-    function lbList() {
-      const p = posts.value.find((x) => x.postId === lightbox.postId);
-      return p ? p.mediaContent : [];
+    function openPreview(index) {
+      if (!draft.previews.length || draft.uploading) return;
+      clearTimeout(tapCloseTimer);
+      lastTap = 0;
+      lightbox.postId = null;
+      lightbox.items = draft.previews.map((url) => ({ type: 'url', url }));
+      lightbox.index = Math.max(0, Math.min(index, lightbox.items.length - 1));
+      resetZoom();
+      lightbox.show = true;
+      nextTick(() => {
+        currentSrc();
+        measureLb();
+      });
     }
-    function currentSha() {
-      const list = lbList();
-      return list[lightbox.index]?.sha256 || '';
+
+    function currentSrc() {
+      const it = lightbox.items[lightbox.index];
+      if (!it) return '';
+      return it.type === 'url' ? it.url : lbImgUrl(it.sha);
     }
     function lbStep(d) {
-      const list = lbList();
       const next = lightbox.index + d;
-      if (next >= 0 && next < list.length) {
+      if (next >= 0 && next < lightbox.items.length) {
         lightbox.index = next;
         resetZoom();
       }
     }
     function lbCan(d) {
-      const list = lbList();
       const next = lightbox.index + d;
-      return next >= 0 && next < list.length;
+      return next >= 0 && next < lightbox.items.length;
     }
     function closeLightbox() {
       if (suppressClick) {
@@ -1033,6 +1034,10 @@ createApp({
       openConfirm('删除动态', `删除后不可恢复。确认要删除 「${snippet(p?.textContent)}」 吗？`, async () => {
         try {
           await Api.deletePost(postId);
+          if (isSingle) {
+            location.href = '/';
+            return;
+          }
           if (posts.value.length === 1 && page.value > 1) page.value--;
           await loadFeed();
         } catch (e) {
@@ -1045,7 +1050,7 @@ createApp({
       me, comments, commentText, sendingComment,
       removePost, openLightbox,
       sendComment, onCommentInput, onCommentKeydown, removeComment,
-      toggleTime, displayTime, showToast,
+      toggleTime, displayTime, showToast, showInfo,
     });
 
     if (Api.token) login();
@@ -1054,12 +1059,12 @@ createApp({
       token, tokenFocus, me, posts, page, totalPages, loading, error, lightbox,
       isAuthPage, isSingle,
       goBack,
-      toast,
+      toast, info, closeInfo,
       draft, fileInput,
       login, logout, loadFeed, goPage, onPick, removeDraft, submitPost,
       onDraftInput, ringStyle,
       confirmState, confirmNo, confirmYes,
-      lbImgUrl, currentSha, lbList, lbCan, lbStep, closeLightbox,
+      lbImgUrl, currentSrc, openPreview, lbCan, lbStep, closeLightbox,
       onLbTouchStart, onLbTouchMove, onLbTouchEnd, onLbTouchCancel,
       onLbMouseDown, onLbWheel, onImgClick, lbImgStyle, measureLb,
     };
@@ -1068,7 +1073,7 @@ createApp({
     <div v-if="me && !isSingle" class="wrap">
       <div class="feed">
         <header class="topbar">
-          <div class="brand">MiniSpace <span class="ver">v57</span></div>
+          <div class="brand">MiniSpace <span class="ver">v60</span></div>
           <div class="who">{{ me.nickname }} <button class="link" @click="logout">退出</button></div>
         </header>
 
@@ -1077,7 +1082,7 @@ createApp({
                     data-composer @input="onDraftInput"></textarea>
           <div class="picker-grid">
             <div v-for="(p, i) in draft.previews" :key="i" class="cell">
-              <img :src="p">
+              <img :src="p" @click="openPreview(i)">
               <button class="x" :disabled="draft.uploading" @click="removeDraft(i)">×</button>
               <div v-if="draft.statuses[i] !== 'done'" class="upload-mask">
                 <div v-if="typeof draft.statuses[i] === 'number'" class="ring"
@@ -1124,7 +1129,7 @@ createApp({
     </div>
 
     <div v-else-if="isAuthPage" class="login">
-        <h1>MiniSpace <span class="ver">v57</span></h1>
+        <h1>MiniSpace <span class="ver">v60</span></h1>
         <p class="sub">填入你的访问 token 进入</p>
         <div class="login-box">
           <input v-model="token" :placeholder="tokenFocus ? '' : 'token'" autocomplete="off"
@@ -1148,15 +1153,15 @@ createApp({
            @mousedown.prevent="onLbMouseDown" @wheel.prevent="onLbWheel">
         <div class="lb-stage">
           <transition name="lb-slide" mode="out-in">
-            <img :key="lightbox.index" :src="lbImgUrl(currentSha())" :style="lbImgStyle()"
+            <img :key="lightbox.index" :src="currentSrc()" :style="lbImgStyle()"
                  @load="measureLb" @click.stop="onImgClick">
           </transition>
         </div>
-        <button v-if="lbList().length > 1" class="lb-nav prev" :class="{ off: !lbCan(-1) }"
+        <button v-if="lightbox.items.length > 1" class="lb-nav prev" :class="{ off: !lbCan(-1) }"
                 :disabled="!lbCan(-1)" @click.stop="lbStep(-1)">‹</button>
-        <button v-if="lbList().length > 1" class="lb-nav next" :class="{ off: !lbCan(1) }"
+        <button v-if="lightbox.items.length > 1" class="lb-nav next" :class="{ off: !lbCan(1) }"
                 :disabled="!lbCan(1)" @click.stop="lbStep(1)">›</button>
-        <span class="lb-count">{{ lightbox.index + 1 }} / {{ lbList().length }}</span>
+        <span class="lb-count">{{ lightbox.index + 1 }} / {{ lightbox.items.length }}</span>
       </div>
 
       <div v-if="confirmState.show" class="modal-mask" @click.self="confirmNo">
@@ -1166,6 +1171,16 @@ createApp({
           <div class="modal-actions">
             <button class="ghost" @click="confirmNo">取消</button>
             <button class="primary danger" @click="confirmYes">删除</button>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="info.show" class="modal-mask" @click.self="closeInfo">
+        <div class="modal">
+          <h3>{{ info.title }}</h3>
+          <p>{{ info.message }}</p>
+          <div class="modal-actions">
+            <button class="primary" @click="closeInfo">确定</button>
           </div>
         </div>
       </div>

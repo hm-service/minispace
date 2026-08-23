@@ -40,6 +40,9 @@ using (var scope = app.Services.CreateScope())
 app.UseDefaultFiles();
 app.Use(async (context, next) =>
 {
+    // 防点击劫持：禁止被 iframe 嵌入（frame-ancestors 为现代替代，X-Frame-Options 兜底旧浏览器）
+    context.Response.Headers.XFrameOptions = "DENY";
+    context.Response.Headers.ContentSecurityPolicy = "frame-ancestors 'none'";
     // SPA 路由（/auth、/posts/... 等无扩展名路径）一律 no-cache，确保拿到最新的 index.html
     if (!(context.Request.Path.Value ?? "").Contains('.'))
         context.Response.Headers.CacheControl = "no-cache";

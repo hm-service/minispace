@@ -203,6 +203,7 @@ input:focus, textarea:focus {
 .picker-grid img {
   display: block; width: 100%; height: auto;
   aspect-ratio: 1 / 1; object-fit: cover; background: var(--surface-muted);
+  cursor: zoom-in;
 }
 .add-cell {
   aspect-ratio: 1 / 1;
