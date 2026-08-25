@@ -1,4 +1,4 @@
-namespace MiniSpace.Data;
+namespace MiniSpace.Repositories;
 
 public static class AuditLog
 {

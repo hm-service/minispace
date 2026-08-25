@@ -2,8 +2,9 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using MiniSpace.Auth;
 using MiniSpace.Models;
+using MiniSpace.Repositories;
 
-namespace MiniSpace.Data;
+namespace MiniSpace.Repositories;
 
 public static class UserSync
 {
@@ -16,7 +17,9 @@ public static class UserSync
     public static async Task SyncAsync(AppDbContext db, string path)
     {
         if (!File.Exists(path))
+        {
             return;
+        }
 
         List<UserEntry> entries;
         try

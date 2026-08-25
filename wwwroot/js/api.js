@@ -17,7 +17,7 @@ const Api = {
     if (res.status === 204) return null;
     const data = await res.json().catch(() => null);
     if (!res.ok) {
-      const err = new Error((data && data.message) || '请求失败 (' + res.status + ')');
+      const err = new Error((data && (data.detail || data.message)) || '请求失败 (' + res.status + ')');
       err.status = res.status;
       throw err;
     }
@@ -36,7 +36,7 @@ const Api = {
       let data = null;
       try { data = JSON.parse(xhr.responseText); } catch {}
       if (xhr.status >= 200 && xhr.status < 300) resolve(data);
-      else reject(new Error((data && data.message) || '上传失败 (' + xhr.status + ')'));
+      else reject(new Error((data && (data.detail || data.message)) || '上传失败 (' + xhr.status + ')'));
     };
     xhr.onerror = () => reject(new Error('网络错误，上传失败'));
     const fd = new FormData();
@@ -49,9 +49,9 @@ const Api = {
   listPosts: (page) => Api.request('GET', '/api/posts?page=' + page),
   post: (postId) => Api.request('GET', '/api/posts/' + postId),
   deletePost: (postId) => Api.request('DELETE', '/api/posts/' + postId),
-  comments: (postId) => Api.request('GET', '/api/posts/' + postId + '/comments'),
+  comments: (postId) => Api.request('GET', '/api/comments?postId=' + encodeURIComponent(postId)),
   addComment: (postId, content) =>
-    Api.request('POST', '/api/posts/' + postId + '/comments', { content }),
+    Api.request('POST', '/api/comments', { postId, content }),
   deleteComment: (commentId) => Api.request('DELETE', '/api/comments/' + commentId),
 
   async mediaBlob(sha256, mode) {

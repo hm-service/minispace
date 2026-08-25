@@ -1,7 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using MiniSpace.Models;
 
-namespace MiniSpace.Data;
+namespace MiniSpace.Repositories;
 
 public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {

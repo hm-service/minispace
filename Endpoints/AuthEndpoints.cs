@@ -1,38 +1,43 @@
-using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Http.HttpResults;
 using MiniSpace.Auth;
-using MiniSpace.Data;
-using MiniSpace.Models;
+using MiniSpace.Repositories;
 
 namespace MiniSpace.Endpoints;
 
+public record LoginResult(string UserId, string Nickname);
+
 public static class AuthEndpoints
 {
-    public static IEndpointRouteBuilder MapAuthEndpoints(this IEndpointRouteBuilder app)
+    extension(IEndpointRouteBuilder builder)
     {
-        var group = app.MapGroup("/api");
-
-        group.MapPost("/login", async (HttpContext ctx, AppDbContext db) =>
+        public IEndpointRouteBuilder MapAuthEndpoints()
         {
-            var token = TokenAuth.GetToken(ctx.Request.Headers.Authorization);
-            if (token is null)
-                return ApiErrors.BadRequest("token 不能为空");
+            builder.MapPost("/api/login", LoginAsync).AllowAnonymous();
 
-            var user = await db.Users.AsNoTracking()
-                .FirstOrDefaultAsync(u => u.TokenHash == TokenAuth.Hash(token));
-            var ip = ctx.Connection.RemoteIpAddress?.ToString() ?? "-";
-            return user is null
-                ? Log(ApiErrors.Unauthorized("token 无效"),
-                    $"login.denied ip={ip}")
-                : Log(Results.Ok(new LoginResult(user.UserId, user.Nickname)),
-                    $"login.ok user_id={user.UserId} nickname={user.Nickname} ip={ip}");
-        });
-
-        return app;
+            return builder;
+        }
     }
 
-    private static IResult Log(IResult result, string message)
+    #region Non-Public
+    private static async Task<Results<Ok<LoginResult>, UnauthorizedHttpResult, ProblemHttpResult>>
+        LoginAsync(HttpContext ctx, AppDbContext db)
     {
-        AuditLog.Write(message);
-        return result;
+        var result = await ctx.AuthenticateAsync(TokenAuthDefaults.Scheme);
+
+        if (!result.Succeeded)
+        {
+            // NoResult = 没带 token（Failure 为 null）→ 400；Fail = token 无效 → 401
+            return result.Failure is null
+                ? ProblemResults.InvalidContent("token 不能为空")
+                : TypedResults.Unauthorized();
+        }
+
+        var userId = result.Principal.UserId;
+        var nickname = result.Principal.Nickname;
+        var ip = ctx.Connection.RemoteIpAddress?.ToString() ?? "-";
+        AuditLog.Write($"login.ok user_id={userId} nickname={nickname} ip={ip}");
+        return TypedResults.Ok(new LoginResult(userId, nickname));
     }
+    #endregion
 }
