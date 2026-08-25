@@ -18,7 +18,7 @@ Directory.CreateDirectory(dataDir);
 
 builder.Services
     .AddDbContext<AppDbContext>(
-        o => o.UseSqlite($"Data Source={Path.Combine(dataDir, "data.db")}"))
+        o => o.UseSqlite($"Data Source={Path.Combine(dataDir, "minispace.db")}"))
     .AddDbContext<ThumbDbContext>(
         o => o.UseSqlite($"Data Source={Path.Combine(dataDir, "thumb.db")}"))
     .AddOpenApi()
