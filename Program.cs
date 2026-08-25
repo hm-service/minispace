@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore;
-using MiniSpace.Auth;
+using MiniSpace.Common;
 using MiniSpace.Endpoints;
 using MiniSpace.Repositories;
 
@@ -15,7 +15,6 @@ if (string.IsNullOrWhiteSpace(dataDir))
 }
 
 Directory.CreateDirectory(dataDir);
-AuditLog.Init(Path.Combine(dataDir, "log.txt"));
 
 builder.Services
     .AddDbContext<AppDbContext>(
@@ -26,6 +25,8 @@ builder.Services
     .AddAuthorization()
     .AddAuthentication(TokenAuthDefaults.Scheme)
     .AddScheme<AuthenticationSchemeOptions, TokenAuthHandler>(TokenAuthDefaults.Scheme, null);
+builder.Services.AddSingleton(new MediaStore(Path.Combine(dataDir, "static")));
+builder.Logging.AddJsonConsole();
 
 var app = builder.Build();
 
@@ -38,7 +39,12 @@ using (var scope = app.Services.CreateScope())
     db.Database.EnsureCreated();
     var thumbDb = scope.ServiceProvider.GetRequiredService<ThumbDbContext>();
     thumbDb.Database.EnsureCreated();
-    await UserSync.SyncAsync(db, Path.Combine(dataDir, "users.json"));
+    var sp = scope.ServiceProvider;
+
+    await UserSync.SyncAsync(
+        db,
+        Path.Combine(dataDir, "users.json"),
+        sp.GetRequiredService<ILoggerFactory>());
 }
 
 app.UseDefaultFiles();
@@ -68,7 +74,7 @@ app.UseAuthorization();
 app.MapAuthEndpoints()
     .MapPostEndpoints()
     .MapCommentEndpoints()
-    .MapMediaEndpoints(mediaDirectory)
+    .MapMediaEndpoints()
     .MapFallbackToFile("index.html");
 
 app.Run();

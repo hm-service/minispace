@@ -7,7 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using MiniSpace.Repositories;
 
-namespace MiniSpace.Auth;
+namespace MiniSpace.Common;
 
 public static class TokenAuthDefaults
 {

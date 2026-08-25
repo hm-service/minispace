@@ -1,8 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
-using MiniSpace.Auth;
+using MiniSpace.Common;
 using MiniSpace.Models;
-using MiniSpace.Repositories;
 
 namespace MiniSpace.Repositories;
 
@@ -14,12 +13,14 @@ public static class UserSync
     /// 将 DATA_DIR/users.json 与 user 表对齐：文件不存在则不做任何事；
     /// 按 userId upsert（存在则盲写 nickname/token_hash，不存在则插入），不删除 json 中缺失的用户。
     /// </summary>
-    public static async Task SyncAsync(AppDbContext db, string path)
+    public static async Task SyncAsync(AppDbContext db, string path, ILoggerFactory loggerFactory)
     {
         if (!File.Exists(path))
         {
             return;
         }
+
+        var logger = loggerFactory.CreateLogger(typeof(UserSync));
 
         List<UserEntry> entries;
         try
@@ -30,7 +31,7 @@ public static class UserSync
         }
         catch (Exception ex)
         {
-            AuditLog.Write($"users.sync failed: {ex.Message}");
+            logger.LogWarning("users.sync failed: {message}", ex.Message);
             return;
         }
 
@@ -44,17 +45,17 @@ public static class UserSync
                 string.IsNullOrWhiteSpace(e.Nickname) ||
                 string.IsNullOrWhiteSpace(e.Token))
             {
-                AuditLog.Write($"users.sync skip invalid entry: {e.UserId}");
+                logger.LogWarning("users.sync skip invalid entry: {userId}", e.UserId);
                 continue;
             }
             if (!e.Token.All(c => c <= 0x7F))
             {
-                AuditLog.Write($"users.sync skip non-ascii token: {e.UserId}");
+                logger.LogWarning("users.sync skip non-ascii token: {userId}", e.UserId);
                 continue;
             }
             if (!seen.Add(e.UserId))
             {
-                AuditLog.Write($"users.sync skip duplicate userId: {e.UserId}");
+                logger.LogWarning("users.sync skip duplicate userId: {userId}", e.UserId);
                 continue;
             }
 
@@ -80,7 +81,7 @@ public static class UserSync
         if (inserted > 0 || updated > 0)
         {
             await db.SaveChangesAsync();
-            AuditLog.Write($"users.sync inserted={inserted} updated={updated}");
+            logger.LogInformation("users.sync inserted={inserted} updated={updated}", inserted, updated);
         }
     }
 }

@@ -3,7 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.EntityFrameworkCore;
-using MiniSpace.Auth;
+using MiniSpace.Common;
 using MiniSpace.Models;
 using MiniSpace.Repositories;
 using SixLabors.ImageSharp;
@@ -14,24 +14,25 @@ namespace MiniSpace.Endpoints;
 
 public record MediaDto(string Sha256, string ContentType, int Width, int Height, string Url);
 
-public static class MediaEndpoints
+public static class MediaRoutes
 {
     extension(IEndpointRouteBuilder builder)
     {
-        public IEndpointRouteBuilder MapMediaEndpoints(string mediaDir)
+        public IEndpointRouteBuilder MapMediaEndpoints()
         {
-            s_mediaDirectory = mediaDir;
-
-            builder.MapGet("/media/{key}", GetMediaAsync).RequireAuthorization();
-            builder.MapPost("/api/media/", UploadImageAsync).RequireAuthorization().DisableAntiforgery();
+            builder.MapGet("/media/{key}", MediaEndpoints.GetMediaAsync).RequireAuthorization();
+            builder.MapPost("/api/media/", MediaEndpoints.UploadImageAsync).RequireAuthorization().DisableAntiforgery();
 
             return builder;
         }
     }
 
-    #region Non-Public
-    private static async Task<Results<FileContentHttpResult, PhysicalFileHttpResult, NotFound, ProblemHttpResult>>
-        GetMediaAsync(string key, AppDbContext db, ThumbDbContext thumbs, HttpContext ctx)
+}
+
+public class MediaEndpoints
+{
+    internal static async Task<Results<FileContentHttpResult, PhysicalFileHttpResult, NotFound, ProblemHttpResult>>
+        GetMediaAsync(string key, AppDbContext db, ThumbDbContext thumbs, MediaStore mediaStore, HttpContext ctx)
     {
         var (sha256, mode) = SplitKey(key);
         if (mode is not null && !ThumbModes.Contains(mode))
@@ -48,7 +49,7 @@ public static class MediaEndpoints
             return TypedResults.NotFound();
         }
 
-        var path = MediaStore.PathFor(s_mediaDirectory, sha256);
+        var path = mediaStore.PathFor(sha256);
         if (!File.Exists(path))
         {
             return TypedResults.NotFound();
@@ -84,8 +85,8 @@ public static class MediaEndpoints
 
         return TypedResults.PhysicalFile(path, media.Mime);
     }
-    private static async Task<Results<Created<MediaDto>, ProblemHttpResult>>
-        UploadImageAsync(IFormFile file, AppDbContext db, HttpContext ctx)
+    internal static async Task<Results<Created<MediaDto>, ProblemHttpResult>>
+        UploadImageAsync(IFormFile file, AppDbContext db, HttpContext ctx, MediaStore mediaStore, ILogger<MediaEndpoints> logger)
     {
         var userId = ctx.User.UserId;
 
@@ -134,7 +135,7 @@ public static class MediaEndpoints
             existing = await db.Media.FirstOrDefaultAsync(m => m.Sha256 == sha256);
             if (existing is null)
             {
-                var path = MediaStore.PathFor(s_mediaDirectory, sha256);
+                var path = mediaStore.PathFor(sha256);
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 await File.WriteAllBytesAsync(path, bytes);
 
@@ -156,20 +157,22 @@ public static class MediaEndpoints
                 };
                 db.Media.Add(existing);
                 await db.SaveChangesAsync();
-                AuditLog.Write($"media.upload sha256={sha256} size={bytes.Length} " +
-                               $"user_id={userId} ip={ctx.Connection.RemoteIpAddress}");
+                logger.LogInformation(
+                    "media.upload sha256={sha256} size={bytes.Length} user_id={userId} ip={ip}",
+                    sha256, bytes.Length, userId, ctx.Connection.RemoteIpAddress);
             }
             else
             {
-                AuditLog.Write($"media.reuse sha256={sha256} user_id={userId} " +
-                               $"ip={ctx.Connection.RemoteIpAddress}");
+                logger.LogInformation(
+                    "media.reuse sha256={sha256} user_id={userId} ip={ip}",
+                    sha256, userId, ctx.Connection.RemoteIpAddress);
                 if (existing.Width <= 0 || existing.Height <= 0)
                 {
                     existing.Width = w;
                     existing.Height = h;
                     await db.SaveChangesAsync();
                 }
-                var path = MediaStore.PathFor(s_mediaDirectory, sha256);
+                var path = mediaStore.PathFor(sha256);
                 if (!File.Exists(path))
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -186,7 +189,8 @@ public static class MediaEndpoints
         return TypedResults.Created($"/media/{sha256}",
             new MediaDto(sha256, existing.Mime, existing.Width, existing.Height, $"/media/{sha256}"));
     }
-    private static string s_mediaDirectory = string.Empty;
+
+    #region Non-Public
     private static readonly HashSet<string> AllowedExt = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"];
     private static readonly byte[] ThumbFail = Encoding.ASCII.GetBytes("THUMBFAIL");
     private static readonly long MaxSize = 20L * 1024 * 1024;

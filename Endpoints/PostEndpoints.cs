@@ -2,9 +2,8 @@ using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Http.HttpResults;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using MiniSpace.Auth;
+using MiniSpace.Common;
 using MiniSpace.Models;
 using MiniSpace.Repositories;
 
@@ -29,30 +28,27 @@ public record PostMetadataDto(int TotalCount);
 
 public record CreatePostRequest(string? TextContent, List<string>? MediaContent);
 
-public static partial class PostEndpoints
+public static partial class PostRoutes
 {
     extension(IEndpointRouteBuilder builder)
     {
         public IEndpointRouteBuilder MapPostEndpoints()
         {
-            builder.MapGet("/api/posts/metadata", GetMetadataAsync).RequireAuthorization();
-            builder.MapGet("/api/posts/", GetPostListAsync).RequireAuthorization();
-            builder.MapGet("/api/posts/{postId}", GetPostAsync).RequireAuthorization();
-            builder.MapPost("/api/posts", CreatePostAsync).RequireAuthorization();
-            builder.MapDelete("/api/posts/{postId}", DeletePostAsync).RequireAuthorization();
+            builder.MapGet("/api/posts/metadata", PostEndpoints.GetMetadataAsync).RequireAuthorization();
+            builder.MapGet("/api/posts/", PostEndpoints.GetPostListAsync).RequireAuthorization();
+            builder.MapGet("/api/posts/{postId}", PostEndpoints.GetPostAsync).RequireAuthorization();
+            builder.MapPost("/api/posts", PostEndpoints.CreatePostAsync).RequireAuthorization();
+            builder.MapDelete("/api/posts/{postId}", PostEndpoints.DeletePostAsync).RequireAuthorization();
 
             return builder;
         }
     }
+}
 
-    #region Non-Public
-    private static readonly int s_pageSize = 10;
-    private static readonly JsonSerializerOptions s_mediaJsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-    };
-    private static async Task<Results<Created<PostDto>, ProblemHttpResult>>
-        CreatePostAsync(CreatePostRequest req, AppDbContext db, HttpContext ctx)
+public partial class PostEndpoints
+{
+    internal static async Task<Results<Created<PostDto>, ProblemHttpResult>>
+        CreatePostAsync(CreatePostRequest req, AppDbContext db, HttpContext ctx, ILogger<PostEndpoints> logger)
     {
         var userId = ctx.User.UserId;
         var text = req.TextContent?.Trim() ?? "";
@@ -94,20 +90,21 @@ public static partial class PostEndpoints
         };
         db.Posts.Add(post);
         await db.SaveChangesAsync();
-        AuditLog.Write($"post.create post_id={post.PostId} user_id={userId} " +
-                       $"ip={ctx.Connection.RemoteIpAddress}");
+        logger.LogInformation(
+            "post.create post_id={postId} user_id={userId} ip={ip}",
+            post.PostId, userId, ctx.Connection.RemoteIpAddress);
 
         var dto = await LoadPostAsync(post.PostId, db);
         return TypedResults.Created($"/api/posts/{post.PostId}", dto);
     }
-    private static async Task<Ok<PostMetadataDto>>
-        GetMetadataAsync(AppDbContext db, HttpContext ctx)
+    internal static async Task<Ok<PostMetadataDto>>
+        GetMetadataAsync(AppDbContext db)
     {
         var count = await db.Posts.CountAsync(p => !p.IsDeleted);
         return TypedResults.Ok(new PostMetadataDto(count));
     }
-    private static async Task<Ok<PostListDto>>
-        GetPostListAsync(int? page, AppDbContext db, HttpContext ctx)
+    internal static async Task<Ok<PostListDto>>
+        GetPostListAsync(int? page, AppDbContext db)
     {
         var rawPage = page ?? 1;
         var current = rawPage <= 0 ? 1 : rawPage;
@@ -143,8 +140,8 @@ public static partial class PostEndpoints
 
         return TypedResults.Ok(new PostListDto(dtos));
     }
-    private static async Task<Results<Ok<PostDto>, NotFound>>
-        GetPostAsync(string postId, AppDbContext db, HttpContext ctx)
+    internal static async Task<Results<Ok<PostDto>, NotFound>>
+        GetPostAsync(string postId, AppDbContext db)
     {
         var dto = await LoadPostAsync(postId, db);
         if (dto is null)
@@ -154,8 +151,8 @@ public static partial class PostEndpoints
 
         return TypedResults.Ok(dto);
     }
-    private static async Task<Results<NoContent, NotFound, ProblemHttpResult>>
-        DeletePostAsync(string postId, AppDbContext db, HttpContext ctx)
+    internal static async Task<Results<NoContent, NotFound, ProblemHttpResult>>
+        DeletePostAsync(string postId, AppDbContext db, HttpContext ctx, ILogger<PostEndpoints> logger)
     {
         var userId = ctx.User.UserId;
 
@@ -167,17 +164,26 @@ public static partial class PostEndpoints
 
         if (post.UserId != userId)
         {
-            AuditLog.Write($"post.delete.denied post_id={postId} user_id={userId} " +
-                           $"ip={ctx.Connection.RemoteIpAddress}");
+            logger.LogInformation(
+                "post.delete.denied post_id={postId} user_id={userId} ip={ip}",
+                postId, userId, ctx.Connection.RemoteIpAddress);
             return ProblemResults.InvalidOperation("只能删除自己的帖子");
         }
 
         post.IsDeleted = true;
         await db.SaveChangesAsync();
-        AuditLog.Write($"post.delete post_id={postId} user_id={userId} " +
-                       $"ip={ctx.Connection.RemoteIpAddress}");
+        logger.LogInformation(
+            "post.delete post_id={postId} user_id={userId} ip={ip}",
+            postId, userId, ctx.Connection.RemoteIpAddress);
         return TypedResults.NoContent();
     }
+
+    #region Non-Public
+    private static readonly int s_pageSize = 10;
+    private static readonly JsonSerializerOptions s_mediaJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
     private static async Task<PostDto?> LoadPostAsync(string postId, AppDbContext db)
     {
         var row = await (

@@ -30,10 +30,6 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         post.Property(p => p.IsDeleted).HasColumnName("is_deleted");
         post.HasIndex(p => p.PostId).IsUnique();
         post.HasIndex(p => p.UserId);
-        post.HasOne(p => p.User).WithMany()
-            .HasForeignKey(p => p.UserId)
-            .HasPrincipalKey(u => u.UserId)
-            .OnDelete(DeleteBehavior.Restrict);
 
         var comment = modelBuilder.Entity<Comment>().ToTable("comment");
         comment.Property(c => c.Id).HasColumnName("id");
@@ -45,14 +41,6 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         comment.Property(c => c.IsDeleted).HasColumnName("is_deleted");
         comment.HasIndex(c => c.CommentId).IsUnique();
         comment.HasIndex(c => c.PostId);
-        comment.HasOne(c => c.Post).WithMany()
-            .HasForeignKey(c => c.PostId)
-            .HasPrincipalKey(p => p.PostId)
-            .OnDelete(DeleteBehavior.Restrict);
-        comment.HasOne(c => c.User).WithMany()
-            .HasForeignKey(c => c.UserId)
-            .HasPrincipalKey(u => u.UserId)
-            .OnDelete(DeleteBehavior.Restrict);
 
         var media = modelBuilder.Entity<Media>().ToTable("media");
         media.Property(m => m.Id).HasColumnName("id");

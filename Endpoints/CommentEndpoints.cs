@@ -1,6 +1,6 @@
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.EntityFrameworkCore;
-using MiniSpace.Auth;
+using MiniSpace.Common;
 using MiniSpace.Repositories;
 using MiniSpace.Models;
 
@@ -18,23 +18,26 @@ public record CommentList(List<CommentDto> Items);
 
 public record CreateCommentRequest(string? PostId, string? Content);
 
-public static class CommentEndpoints
+public static class CommentRoutes
 {
     extension(IEndpointRouteBuilder builder)
     {
         public IEndpointRouteBuilder MapCommentEndpoints()
         {
-            builder.MapPost("/api/comments", CreateCommentAsync).RequireAuthorization();
-            builder.MapGet("/api/comments", GetCommentListAsync).RequireAuthorization();
-            builder.MapDelete("/api/comments/{commentId}", DeleteCommentAsync).RequireAuthorization();
+            builder.MapPost("/api/comments", CommentEndpoints.CreateCommentAsync).RequireAuthorization();
+            builder.MapGet("/api/comments", CommentEndpoints.GetCommentListAsync).RequireAuthorization();
+            builder.MapDelete("/api/comments/{commentId}", CommentEndpoints.DeleteCommentAsync).RequireAuthorization();
 
             return builder;
         }
     }
+}
 
-    #region Non-Public
-    private static async Task<Results<Created<CommentDto>, ProblemHttpResult, NotFound>>
-        CreateCommentAsync(CreateCommentRequest req, AppDbContext db, HttpContext ctx)
+
+public class CommentEndpoints
+{
+    internal static async Task<Results<Created<CommentDto>, ProblemHttpResult, NotFound>>
+        CreateCommentAsync(CreateCommentRequest req, AppDbContext db, HttpContext ctx, ILogger<CommentEndpoints> logger)
     {
         var userId = ctx.User.UserId;
         var userNickname = ctx.User.Nickname;
@@ -71,14 +74,15 @@ public static class CommentEndpoints
         };
         db.Comments.Add(comment);
         await db.SaveChangesAsync();
-        AuditLog.Write($"comment.create comment_id={comment.CommentId} post_id={postId} " +
-                       $"user_id={userId} ip={ctx.Connection.RemoteIpAddress}");
+        logger.LogInformation(
+            "comment.create comment_id={commentId} post_id={postId} user_id={userId} ip={ip}",
+            comment.CommentId, postId, userId, ctx.Connection.RemoteIpAddress);
 
         return TypedResults.Created($"/api/comments/{comment.CommentId}",
             new CommentDto(comment.CommentId, userId, postId, userNickname, content, comment.CreatedAt));
     }
-    private static async Task<Results<Ok<CommentList>, NotFound, ProblemHttpResult>>
-        GetCommentListAsync(string? postId, AppDbContext db, HttpContext ctx)
+    internal static async Task<Results<Ok<CommentList>, NotFound, ProblemHttpResult>>
+        GetCommentListAsync(string? postId, AppDbContext db)
     {
         postId = postId?.Trim() ?? string.Empty;
         if (postId.Length == 0)
@@ -100,8 +104,8 @@ public static class CommentEndpoints
             .ToListAsync();
         return TypedResults.Ok(new CommentList(items));
     }
-    private static async Task<Results<NoContent, NotFound, ProblemHttpResult>>
-        DeleteCommentAsync(string commentId, AppDbContext db, HttpContext ctx)
+    internal static async Task<Results<NoContent, NotFound, ProblemHttpResult>>
+        DeleteCommentAsync(string commentId, AppDbContext db, HttpContext ctx, ILogger<CommentEndpoints> logger)
     {
         var userId = ctx.User.UserId;
         var comment = await db.Comments
@@ -111,17 +115,18 @@ public static class CommentEndpoints
             return TypedResults.NotFound();
         if (comment.UserId != userId)
         {
-            AuditLog.Write($"comment.delete.denied comment_id={commentId} " +
-                           $"user_id={userId} ip={ctx.Connection.RemoteIpAddress}");
+            logger.LogInformation(
+                "comment.delete.denied comment_id={commentId} user_id={userId} ip={ip}",
+                commentId, userId, ctx.Connection.RemoteIpAddress);
             return ProblemResults.ForbiddenOperation("只能删除自己的评论");
         }
 
         comment.IsDeleted = true;
         await db.SaveChangesAsync();
-        AuditLog.Write($"comment.delete comment_id={commentId} post_id={comment.PostId} " +
-                       $"user_id={userId} ip={ctx.Connection.RemoteIpAddress}");
+        logger.LogInformation(
+            "comment.delete comment_id={commentId} post_id={comment.PostId} user_id={userId} ip={ip}",
+            commentId, comment.PostId, userId, ctx.Connection.RemoteIpAddress);
 
         return TypedResults.NoContent();
     }
-    #endregion
 }
