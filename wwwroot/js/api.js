@@ -1,4 +1,4 @@
-const Api = {
+export const Api = {
   token: localStorage.getItem('ms_token') || '',
 
   async request(method, url, body) {
