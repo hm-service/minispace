@@ -19,6 +19,7 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 
 ENV DATA_DIR=/data
 ENV ASPNETCORE_HTTP_PORTS=8080
+ENV TZ=Asia/Shanghai
 
 COPY --from=build /out /app
 
