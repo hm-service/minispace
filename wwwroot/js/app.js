@@ -1,5 +1,16 @@
 const { createApp, ref, reactive, nextTick, inject, provide, onMounted, onUnmounted } = Vue;
-console.log('[MiniSpace] frontend v37');
+const FRONTEND_VERSION = 'v69';
+console.log('[MiniSpace] frontend', FRONTEND_VERSION);
+
+// 特性配置：卡片内大图（expanded）中间态 —— 桌面大屏启用，移动端直开全屏
+const FEATURES = {
+  expandedMode: true,       // 总开关
+  expandedMinWidth: 768,    // 启用 expanded 的最小视口宽度（px）
+};
+function expandedModeEnabled() {
+  return FEATURES.expandedMode
+    && window.matchMedia(`(min-width: ${FEATURES.expandedMinWidth}px)`).matches;
+}
 
 // 阻止页面级双指缩放（lightbox 内捏合本来就会 preventDefault，不受影响）
 document.addEventListener('touchmove', (e) => {
@@ -81,8 +92,7 @@ const PostCard = {
       setTimeout(() => { suppressClick = false; }, 350);
     }
 
-    // ---- 卡片内大图 ----
-    function expList() { return media; }
+    // ---- 卡片内大图（仅桌面端启用，见 expandedModeEnabled） ----
     function expSha() { return media[expanded[postId] ?? 0]?.sha256 || ''; }
     function expNextSha() { return media[(expanded[postId] ?? 0) + 1]?.sha256 || ''; }
     function expPrevSha() {
@@ -125,6 +135,13 @@ const PostCard = {
     function openExpanded(i) {
       expanded[postId] = i;
       nextTick(measureExpHeight);
+    }
+    function onGridClick(i) {
+      if (expandedModeEnabled()) {
+        openExpanded(i);
+      } else {
+        app.openLightbox(postId, i);
+      }
     }
 
     // ---- 卡片轮播（拖动跟随） ----
@@ -278,7 +295,6 @@ const PostCard = {
         }
       }
     }
-
     function openMenu() {
       menuOpen.value = true;
     }
@@ -343,10 +359,11 @@ const PostCard = {
       stageLoaded, onExpImgLoad,
       menuOpen, openMenu, closeMenu, favorite, copyLink, menuDelete,
       openPost,
-      imgUrl, media, expanded,
+      imgUrl, media, expanded, expandedModeEnabled,
       expSha, expNextSha, expPrevSha, expStep, collapse,
       expStageStyle, expCurrentStyle, expNextStyle, expPrevStyle,
-      openExpanded, onExpTouchStart, onExpTouchMove, onExpTouchEnd, onExpTouchCancel,
+      openExpanded, onGridClick,
+      onExpTouchStart, onExpTouchMove, onExpTouchEnd, onExpTouchCancel,
       onExpMouseDown,
     };
   },
@@ -372,12 +389,17 @@ const PostCard = {
         </div>
       </header>
       <p class="text">{{ post.textContent }}</p>
-      <div v-if="typeof expanded[post.postId] === 'number'" class="post-expand"
+      <div v-if="expandedModeEnabled() && typeof expanded[post.postId] === 'number'" class="post-expand"
            @touchstart="onExpTouchStart($event)"
            @touchmove="onExpTouchMove"
            @touchend="onExpTouchEnd"
            @touchcancel="onExpTouchCancel"
            @mousedown.prevent="onExpMouseDown($event)">
+        <div class="expand-bar">
+          <button class="ghost small" @click="collapse()">收起</button>
+          <span class="exp-count">{{ (expanded[post.postId] ?? 0) + 1 }} / {{ media.length }}</span>
+          <button class="ghost small" @click="openLightbox(post.postId, expanded[post.postId] ?? 0)">⛶ 大图</button>
+        </div>
         <div class="exp-stage" :class="{ 'stage-loaded': stageLoaded, 'exp-single': media.length === 1 }"
              :data-post="post.postId" :style="expStageStyle()">
           <img v-if="expPrevSha()" class="exp-img" :src="imgUrl(expPrevSha(), 'medium')"
@@ -387,11 +409,20 @@ const PostCard = {
                @click="collapse()">
           <img v-if="expNextSha()" class="exp-img" :src="imgUrl(expNextSha(), 'medium')"
                :style="expNextStyle()" draggable="false">
-        </div>
-        <div class="expand-bar">
-          <button class="ghost small" @click="collapse()">收起</button>
-          <span class="exp-count">{{ (expanded[post.postId] ?? 0) + 1 }} / {{ media.length }}</span>
-          <button class="primary small" @click="openLightbox(post.postId, expanded[post.postId] ?? 0)">⛶ 大图</button>
+          <button v-if="expPrevSha()" class="exp-edge prev" title="上一张"
+                  @click.stop="expStep(-1)" @mousedown.stop>
+            <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
+              <path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2.5"
+                    stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+          <button v-if="expNextSha()" class="exp-edge next" title="下一张"
+                  @click.stop="expStep(1)" @mousedown.stop>
+            <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
+              <path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.5"
+                    stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
         </div>
       </div>
       <div v-else-if="media.length" :class="gridClass(media)" :data-post="post.postId">
@@ -402,7 +433,7 @@ const PostCard = {
                : (media.length === 1 ? singleAspect(m) : undefined)"
              :class="media.length === 1 && singleImg.loaded ? 'img-loaded' : undefined"
              loading="lazy" @load="onSingleLoad"
-             @click="openExpanded(i)">
+             @click="onGridClick(i)">
       </div>
       <div class="comments">
         <p v-if="!(comments[post.postId] || []).length" class="no-comment">还没有评论</p>
@@ -484,12 +515,20 @@ createApp({
       info.show = false;
     }
 
-    // ---- 全屏大图（根级，独立缓存，关闭时释放） ----
-    const lbCache = reactive(new Map());
+    // ---- 全屏大图（根级，独立缓存，关闭时释放；先 medium 立即出图，后台升级原图） ----
+    const lbCache = reactive(new Map());      // 原图
     const lbLoading = new Set();
+    const lbMedium = reactive(new Map());     // medium 占位
+    const lbMediumLoading = new Set();
     function lbImgUrl(sha) {
       if (!sha) return '';
       if (lbCache.has(sha)) return lbCache.get(sha);
+      if (!lbMedium.has(sha) && !lbMediumLoading.has(sha)) {
+        lbMediumLoading.add(sha);
+        Api.mediaBlob(sha, 'medium')
+          .then((blob) => lbMedium.set(sha, URL.createObjectURL(blob)))
+          .catch(() => lbMedium.set(sha, ''));
+      }
       if (!lbLoading.has(sha)) {
         lbLoading.add(sha);
         Api.mediaBlob(sha)
@@ -500,7 +539,22 @@ createApp({
           })
           .catch(() => lbCache.set(sha, ''));
       }
-      return '';
+      return lbMedium.get(sha) || '';
+    }
+    function lbAdjacentUrl(sha) {
+      if (!sha) return '';
+      if (lbCache.has(sha)) return lbCache.get(sha);
+      if (!lbMedium.has(sha) && !lbMediumLoading.has(sha)) {
+        lbMediumLoading.add(sha);
+        Api.mediaBlob(sha, 'medium')
+          .then((blob) => lbMedium.set(sha, URL.createObjectURL(blob)))
+          .catch(() => lbMedium.set(sha, ''));
+      }
+      return lbMedium.get(sha) || '';
+    }
+    function lbSha(offset) {
+      const it = lightbox.items[lightbox.index + offset];
+      return it && it.type === 'sha' ? it.sha : '';
     }
 
     function openLightbox(postId, index) {
@@ -563,6 +617,11 @@ createApp({
       }
       lbCache.clear();
       lbLoading.clear();
+      for (const url of lbMedium.values()) {
+        if (url) URL.revokeObjectURL(url);
+      }
+      lbMedium.clear();
+      lbMediumLoading.clear();
     }
 
     let suppressClick = false;
@@ -578,10 +637,66 @@ createApp({
     let lastTap = 0;
     let tapCloseTimer = null;
 
+    // 全屏轮播：拖动跟随 + 回弹/吸附（与卡片内 expanded 同构）
+    const lbDrag = reactive({ on: false, dx: 0, snapping: false, width: 0 });
+    let lbDragStartX = 0;
+    function lbStageWidth() {
+      const stage = document.querySelector('.lb-stage');
+      return stage ? stage.clientWidth : window.innerWidth;
+    }
+    function lbItemStyle(offset) {
+      const d = lbDrag;
+      const active = d.on || d.snapping;
+      const dx = d.dx;
+      if (offset === 0) {
+        return { transform: active ? `translateX(${dx}px)` : 'none' };
+      }
+      const visible = active && ((offset < 0 && dx > 0) || (offset > 0 && dx < 0));
+      return {
+        transform: `translateX(calc(${offset * 100}% + ${dx}px))`,
+        visibility: visible ? 'visible' : 'hidden',
+      };
+    }
+    function lbDragMove(x) {
+      const w = lbDrag.width || window.innerWidth;
+      let dx = x - lbDragStartX;
+      // 边缘阻尼：到第一张/最后一张后手感减半
+      if (dx < 0 && !lbCan(1)) dx *= 0.4;
+      if (dx > 0 && !lbCan(-1)) dx *= 0.4;
+      lbDrag.dx = dx;
+    }
+    function lbDragFinish() {
+      if (!lbDrag.on) return;
+      lbDrag.on = false;
+      const w = lbDrag.width || window.innerWidth;
+      const dx = lbDrag.dx;
+      const threshold = Math.min(80, w * 0.28);
+      const hasTarget = dx < 0 ? lbCan(1) : lbCan(-1);
+      if (Math.abs(dx) < threshold || !hasTarget) {
+        lbDrag.snapping = true;
+        lbDrag.dx = 0;
+        setTimeout(lbDragReset, 220);
+      } else {
+        const d = dx < 0 ? 1 : -1;
+        lbDrag.snapping = true;
+        lbDrag.dx = -d * w;
+        setTimeout(() => {
+          lbDragReset();
+          lbStep(d);
+          swallowNextClick();
+        }, 220);
+      }
+    }
+    function lbDragReset() {
+      lbDrag.on = false;
+      lbDrag.snapping = false;
+      lbDrag.dx = 0;
+    }
+
     function measureLb() {
-      const el = document.querySelector('.lb-stage img');
+      const el = document.querySelector('.lb-stage .lb-item.current img');
       if (!el) return;
-      const stage = el.parentElement;
+      const stage = document.querySelector('.lb-stage');
       const sr = stage.getBoundingClientRect();
       lbZoom.stage = { w: sr.width, h: sr.height, left: sr.left, top: sr.top };
       lbZoom.box = { w: el.offsetWidth, h: el.offsetHeight };
@@ -694,6 +809,8 @@ createApp({
       suppressClick = false;
       const t = e.touches;
       lbTouch = { x1: t[0].clientX, y1: t[0].clientY, x2: null, y2: null, dist: 0, moved: false };
+      lbDragStartX = t[0].clientX;
+      lbDrag.width = lbStageWidth();
       if (t.length === 2) {
         lbTouch.x2 = t[1].clientX;
         lbTouch.y2 = t[1].clientY;
@@ -704,6 +821,7 @@ createApp({
       if (!lbTouch) return;
       const t = e.touches;
       if (t.length === 2) {
+        if (lbDrag.on) lbDragReset();
         e.preventDefault();
         lbTouch.moved = true;
         const dist = Math.hypot(t[1].clientX - t[0].clientX, t[1].clientY - t[0].clientY);
@@ -723,6 +841,17 @@ createApp({
         lbZoom.ty += t[0].clientY - lbTouch.y1;
         lbClamp();
         lbTouch.x1 = t[0].clientX; lbTouch.y1 = t[0].clientY;
+      } else if (t.length === 1 && lbZoom.scale === 1) {
+        const dx = t[0].clientX - lbTouch.x1;
+        const dy = t[0].clientY - lbTouch.y1;
+        if (!lbDrag.on && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8) {
+          lbDrag.on = true;
+          lbTouch.moved = true;
+        }
+        if (lbDrag.on) {
+          e.preventDefault();
+          lbDragMove(t[0].clientX);
+        }
       }
     }
     function onLbTouchEnd(e) {
@@ -736,12 +865,9 @@ createApp({
           if (lbTouch.moved) swallowNextClick();
         } else if (lbZoom.scale > 1) {
           if (lbTouch.moved) swallowNextClick();
-        } else {
-          const dx = t[0].clientX - lbTouch.x1;
-          if (Math.abs(dx) > 50) {
-            lbStep(dx < 0 ? 1 : -1);
-            swallowNextClick();
-          }
+        } else if (lbDrag.on) {
+          lbDragFinish();
+          swallowNextClick();
         }
         lbTouch = null;
       } else if (e.touches.length === 1) {
@@ -751,6 +877,7 @@ createApp({
       }
     }
     function onLbTouchCancel() {
+      if (lbDrag.on) lbDragReset();
       lbTouch = null;
     }
 
@@ -761,6 +888,8 @@ createApp({
       drag.moved = false;
       drag.x = e.clientX;
       drag.y = e.clientY;
+      lbDragStartX = e.clientX;
+      lbDrag.width = lbStageWidth();
       window.addEventListener('mousemove', onLbMouseMove);
       window.addEventListener('mouseup', onLbMouseUp);
     }
@@ -775,16 +904,19 @@ createApp({
         lbZoom.tx += dx;
         lbZoom.ty += dy;
         lbClamp();
-      } else if (Math.abs(dx) > 60) {
-        drag.on = false;
-        drag.moved = true;
-        lbStep(dx < 0 ? 1 : -1);
-        swallowNextClick();
-        window.removeEventListener('mousemove', onLbMouseMove);
-        window.removeEventListener('mouseup', onLbMouseUp);
+      } else if (lbZoom.scale === 1) {
+        if (!lbDrag.on && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 4) {
+          lbDrag.on = true;
+          drag.moved = true;
+        }
+        if (lbDrag.on) {
+          drag.moved = true;
+          lbDragMove(e.clientX);
+        }
       }
     }
     function onLbMouseUp() {
+      if (lbDrag.on) lbDragFinish();
       if (drag.moved) swallowNextClick();
       drag.on = false;
       drag.moved = false;
@@ -1077,16 +1209,18 @@ createApp({
       login, logout, loadFeed, goPage, onPick, removeDraft, submitPost,
       onDraftInput, ringStyle,
       confirmState, confirmNo, confirmYes,
-      lbImgUrl, currentSrc, openPreview, lbCan, lbStep, closeLightbox,
+      lbImgUrl, lbAdjacentUrl, lbSha, lbItemStyle,
+      currentSrc, openPreview, lbCan, lbStep, closeLightbox,
       onLbTouchStart, onLbTouchMove, onLbTouchEnd, onLbTouchCancel,
       onLbMouseDown, onLbWheel, onImgClick, lbImgStyle, measureLb,
+      version: FRONTEND_VERSION,
     };
   },
   template: `
     <div v-if="me && !isSingle" class="wrap">
       <div class="feed">
         <header class="topbar">
-          <div class="brand">MiniSpace <span class="ver">v61</span></div>
+          <div class="brand">MiniSpace <span class="ver">{{ version }}</span></div>
           <div class="who">{{ me.nickname }} <button class="link" @click="logout">退出</button></div>
         </header>
 
@@ -1142,7 +1276,7 @@ createApp({
     </div>
 
     <div v-else-if="isAuthPage" class="login">
-        <h1>MiniSpace <span class="ver">v61</span></h1>
+        <h1>MiniSpace <span class="ver">{{ version }}</span></h1>
         <p class="sub">填入你的访问 token 进入</p>
         <div class="login-box">
           <input v-model="token" :placeholder="tokenFocus ? '' : 'token'" autocomplete="off"
@@ -1165,15 +1299,33 @@ createApp({
            @touchend="onLbTouchEnd" @touchcancel="onLbTouchCancel"
            @mousedown.prevent="onLbMouseDown" @wheel.prevent="onLbWheel">
         <div class="lb-stage">
-          <transition name="lb-slide" mode="out-in">
-            <img :key="lightbox.index" :src="currentSrc()" :style="lbImgStyle()"
-                 @load="measureLb" @click.stop="onImgClick">
-          </transition>
+          <div class="lb-track">
+            <div v-if="lbCan(-1)" class="lb-item" :style="lbItemStyle(-1)">
+              <img :src="lbAdjacentUrl(lbSha(-1))" draggable="false">
+            </div>
+            <div class="lb-item current" :style="lbItemStyle(0)">
+              <img :key="lightbox.index" :src="currentSrc()" :style="lbImgStyle()"
+                   @load="measureLb" @click.stop="onImgClick">
+            </div>
+            <div v-if="lbCan(1)" class="lb-item" :style="lbItemStyle(1)">
+              <img :src="lbAdjacentUrl(lbSha(1))" draggable="false">
+            </div>
+          </div>
         </div>
         <button v-if="lightbox.items.length > 1" class="lb-nav prev" :class="{ off: !lbCan(-1) }"
-                :disabled="!lbCan(-1)" @click.stop="lbStep(-1)">‹</button>
+                :disabled="!lbCan(-1)" @click.stop="lbStep(-1)">
+          <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
+            <path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2.5"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
         <button v-if="lightbox.items.length > 1" class="lb-nav next" :class="{ off: !lbCan(1) }"
-                :disabled="!lbCan(1)" @click.stop="lbStep(1)">›</button>
+                :disabled="!lbCan(1)" @click.stop="lbStep(1)">
+          <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
+            <path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.5"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
         <span class="lb-count">{{ lightbox.index + 1 }} / {{ lightbox.items.length }}</span>
       </div>
 
