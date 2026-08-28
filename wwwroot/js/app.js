@@ -4,7 +4,7 @@ import { PostCard } from "./post-card.js?v=70";
 import { useLightbox } from "./use-lightbox.js?v=70";
 
 const { createApp, ref, reactive, provide } = Vue;
-const FRONTEND_VERSION = "v70";
+const FRONTEND_VERSION = "v71";
 console.log("[MiniSpace] frontend", FRONTEND_VERSION);
 
 document.addEventListener(
@@ -213,14 +213,45 @@ createApp({
             location.replace("/auth");
         }
 
-        function onPick(e) {
-            for (const f of e.target.files) {
+        const mimeExt = {
+            "image/png": "png",
+            "image/jpeg": "jpg",
+            "image/gif": "gif",
+            "image/webp": "webp",
+            "image/bmp": "bmp",
+        };
+        function addDraftFiles(files) {
+            for (const f of files) {
                 if (!f.type.startsWith("image/")) continue;
-                draft.files.push(f);
-                draft.previews.push(URL.createObjectURL(f));
+                // 剪贴板图片可能没有扩展名，按 MIME 补一个，避免后端扩展名校验 400
+                const file = /\.(png|jpe?g|gif|webp|bmp)$/i.test(f.name)
+                    ? f
+                    : new File([f], "pasted-" + Date.now() + "." + (mimeExt[f.type] || "png"), {
+                          type: f.type,
+                      });
+                draft.files.push(file);
+                draft.previews.push(URL.createObjectURL(file));
                 draft.statuses.push("done");
             }
+        }
+        function onPick(e) {
+            addDraftFiles(e.target.files);
             e.target.value = "";
+        }
+        function onComposerPaste(e) {
+            const items = e.clipboardData && e.clipboardData.items;
+            if (!items) return;
+            const images = [];
+            for (const item of items) {
+                if (item.kind === "file" && item.type.startsWith("image/")) {
+                    const f = item.getAsFile();
+                    if (f) images.push(f);
+                }
+            }
+            if (images.length) {
+                e.preventDefault();
+                addDraftFiles(images);
+            }
         }
         function removeDraft(i) {
             URL.revokeObjectURL(draft.previews[i]);
@@ -401,6 +432,7 @@ createApp({
             loadFeed,
             goPage,
             onPick,
+            onComposerPaste,
             removeDraft,
             submitPost,
             onDraftInput,
@@ -420,8 +452,8 @@ createApp({
         </header>
 
         <div class="composer card">
-          <textarea v-model="draft.text" rows="3" maxlength="10000" placeholder="分享新鲜事…"
-                    data-composer @input="onDraftInput"></textarea>
+          <textarea v-model="draft.text" rows="3" maxlength="10000" placeholder="分享新鲜事…（Ctrl+V 可直接粘贴截图）"
+                    data-composer @input="onDraftInput" @paste="onComposerPaste($event)"></textarea>
           <div class="picker-grid">
             <div v-for="(p, i) in draft.previews" :key="i" class="cell">
               <img :src="p" @click="openPreview(i)">
